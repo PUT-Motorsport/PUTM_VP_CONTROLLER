@@ -12,8 +12,8 @@
 // #include "putm_vcl_interfaces/msg/xsens_rate_of_turn.hpp"
 // #include "vectornav_msgs/msg/imu_group.hpp"
 
-constexpr double MAX_MOMENT = 108;
-constexpr double CAP_MOMENT = 108;
+constexpr double MAX_MOMENT = 200;
+constexpr double CAP_MOMENT = 100;
 constexpr double Ku = 1.0/50.0;
 constexpr bool enable_tc = true;
 
@@ -287,9 +287,8 @@ void Controller::control_loop() {
   double yaw_rate_ref = yaw_rate > 0 ? yaw_rate + 0.2 : yaw_rate - 0.2;//referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
   double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
-
+  vx_est = 0.0;
   double manual_torque = pedal * MAX_MOMENT;
-
   ControlMode prev_mode = control_mode;
 
   switch (control_mode) {
@@ -451,7 +450,7 @@ void Controller::control_loop() {
   yaw_ref.fz_rr = fz_rr;
   yaw_rate_ref_publisher->publish(yaw_ref);
 
-  setpoints.front_left.torque = convert_torque(tau_final[0]);
+  setpoints.front_left.torque = convert_torque(-tau_final[0]);
   setpoints.front_right.torque = convert_torque(tau_final[1]);
   setpoints.rear_left.torque = convert_torque(tau_final[2]);
   setpoints.rear_right.torque = convert_torque(tau_final[3]);
@@ -459,7 +458,7 @@ void Controller::control_loop() {
 }
 
 inline double Controller::convert_pedal_position(int16_t pedal_position) {
-  static constexpr double PEDAL_SCALER = 500.0;
+  static constexpr double PEDAL_SCALER = 450.0;
   return (((double)pedal_position) / PEDAL_SCALER);
 }
 
