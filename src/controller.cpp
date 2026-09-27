@@ -10,7 +10,7 @@
 #include <cmath>
 #include <algorithm>
 constexpr double TAU_MIN = 0.0;
-constexpr double TAU_MAX = 110.0; // dostosuj do realnego limitu tau_final
+constexpr double TAU_MAX = 180.0; // dostosuj do realnego limitu tau_final
 
 
 
@@ -274,7 +274,7 @@ void Controller::control_loop() {
   
 
 
-  double gain_const = 0.3;
+  double gain_const = 1.0;
   // pi settings
   double Kpro_fr = 174.14 * gain_const;
   double Kpro_fl = 203.53 * gain_const;
@@ -316,7 +316,7 @@ void Controller::control_loop() {
     }
 
   if(pedal > 0.05){ // regulator PI
-    auto velocity_set = 0.5; // velocity in [m/s]
+    auto velocity_set = 1.0; // velocity in [m/s]
 
     auto velocity_front_left_error = velocity_set - (speed_fl * RPM_TO_MPS);
     tau_final[0] = Kpro_fl * velocity_front_left_error + Kint_fl * integral_front_left;
@@ -360,7 +360,7 @@ void Controller::control_loop() {
     
   }
 
-  setpoints.front_left.torque = tau_final[0];
+  setpoints.front_left.torque = -tau_final[0];
   setpoints.front_right.torque = tau_final[1];
   setpoints.rear_left.torque = tau_final[2];
   setpoints.rear_right.torque = tau_final[3];
