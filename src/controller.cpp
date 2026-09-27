@@ -10,7 +10,7 @@
 #include <cmath>
 #include <algorithm>
 constexpr double TAU_MIN = 0.0;
-constexpr double TAU_MAX = 150.0; // dostosuj do realnego limitu tau_final
+constexpr double TAU_MAX = 110.0; // dostosuj do realnego limitu tau_final
 
 
 
@@ -273,16 +273,18 @@ void Controller::control_loop() {
   convert_steering_angle(steering_angle_deg, delta_l_rad, delta_r_rad);
   
 
-  // pi settings
-  double Kpro_fr = 174.14;
-  double Kpro_fl = 203.53;
-  double Kpro_rr = 139.0;
-  double Kpro_rl = 59.26;
 
-  double Kint_fr = 540.79;
-  double Kint_fl = 278.43;
-  double Kint_rr = 430.35;
-  double Kint_rl = 85.01;
+  double gain_const = 0.3;
+  // pi settings
+  double Kpro_fr = 174.14 * gain_const;
+  double Kpro_fl = 203.53 * gain_const;
+  double Kpro_rr = 139.0 * gain_const;
+  double Kpro_rl = 59.26 * gain_const;
+
+  double Kint_fr = 540.79 * gain_const;
+  double Kint_fl = 278.43 * gain_const;
+  double Kint_rr = 430.35 * gain_const;
+  double Kint_rl = 85.01 * gain_const;
 
 
 
@@ -303,6 +305,15 @@ void Controller::control_loop() {
     tau_final[1] = 0.0;
     tau_final[2] = 0.0;
     tau_final[3] = 0.0;
+
+
+
+    if(pedal <= 0.05){
+    integral_front_left  = 0.0;
+    integral_front_right = 0.0;
+    integral_rear_left   = 0.0;
+    integral_rear_right  = 0.0;
+    }
 
   if(pedal > 0.05){ // regulator PI
     auto velocity_set = 0.5; // velocity in [m/s]
