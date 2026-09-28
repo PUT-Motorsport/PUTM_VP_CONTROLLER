@@ -87,14 +87,37 @@ class Controller : public rclcpp::Node {
   const double a2 = 0.73926403;
 
   // MPC State Machine
-  enum class ControlMode { MANUAL, WARMUP, BLEND_IN, NMPC, BLEND_OUT };
-  ControlMode control_mode = ControlMode::MANUAL;
-  double blend_alpha = 0.0;
+  enum class ControlMode {
+    MANUAL,
+    WARMUP,
+    BLEND_IN,
+    NMPC,
+    BLEND_OUT,
+    SPEED_HOLD
+  };
 
-  static constexpr double SPEED_WARMUP     = 2.0;
-  static constexpr double SPEED_ENTER_NMPC = 3.0;
-  static constexpr double SPEED_EXIT_NMPC  = 2.0;
-  static constexpr double BLEND_DURATION_S = 1.0;
+  ControlMode control_mode = ControlMode::MANUAL;
+
+  static constexpr double SPEED_HOLD_PEDAL_ON  = 0.75;
+  static constexpr double SPEED_HOLD_PEDAL_OFF = 0.70;
+
+  // wartości startowe do strojenia
+  double speed_hold_target_mps = 10.0;
+  double speed_hold_kp = 2.0;
+  double speed_hold_ki = 0.5;
+
+  double speed_hold_integral = 0.0;
+  double speed_hold_prev_torque = 0.0;
+
+  // ograniczenie szybkości zmiany momentu
+  double speed_hold_torque_slew = 150.0; // Nm/s
+
+  inline double calculate_speed_hold_torque(double vx);
+  inline double apply_tc_limit(
+      double torque,
+      double vx,
+      double wheel_omega,
+      double pedal);
 
   // Wskaźniki i bufory ACADOS
   tv_nmpc_solver_capsule *acados_capsule;
@@ -128,15 +151,16 @@ class Controller : public rclcpp::Node {
   inline void estimate_velocity_ekf(double ax, double ay, double r, double w_fl, double w_fr, double w_rl, double w_rr, double delta_l, double delta_r, double &vx_est, double &vy_est);
 
   inline const char* controlModeToString(ControlMode mode) {
-  switch (mode) {
-    case ControlMode::MANUAL:    return "MANUAL";
-    case ControlMode::WARMUP:    return "WARMUP";
-    case ControlMode::BLEND_IN:  return "BLEND_IN";
-    case ControlMode::NMPC:      return "NMPC";
-    case ControlMode::BLEND_OUT: return "BLEND_OUT";
-    default:                     return "UNKNOWN";
+      switch (mode) {
+          case ControlMode::MANUAL:     return "MANUAL";
+          case ControlMode::WARMUP:     return "WARMUP";
+          case ControlMode::BLEND_IN:   return "BLEND_IN";
+          case ControlMode::NMPC:       return "NMPC";
+          case ControlMode::BLEND_OUT:  return "BLEND_OUT";
+          case ControlMode::SPEED_HOLD: return "SPEED_HOLD";
+          default:                      return "UNKNOWN";
+      }
   }
-}
 
   void frontbox_driver_input_topic_callback(const FrontboxDriverInput msg);
   void steering_wheel_callback(const SteeringWheel::SharedPtr msg);
@@ -179,6 +203,17 @@ Controller::Controller()
       speed_fl(0), speed_fr(0), speed_rl(0), speed_rr(0),
       ay(0.0), ax(0.0), yaw_rate(0.0), batt_curr(0.0)
       {
+      speed_hold_target_mps =
+        this->declare_parameter<double>("speed_hold.target_mps", 10.0);
+
+      speed_hold_kp =
+          this->declare_parameter<double>("speed_hold.kp", 2.0);
+
+      speed_hold_ki =
+          this->declare_parameter<double>("speed_hold.ki", 0.5);
+
+      speed_hold_torque_slew =
+          this->declare_parameter<double>("speed_hold.torque_slew", 150.0);
 
       acados_capsule = tv_nmpc_acados_create_capsule();
       int status = tv_nmpc_acados_create(acados_capsule);
@@ -265,197 +300,293 @@ void Controller::bms_hv_main_callback(const BmsHvMain msg) { batt_curr = msg.cur
 
 
 
-void Controller::control_loop() {
-  auto start_time = std::chrono::high_resolution_clock::now();
+void Controller::control_loop()
+{
+    // ============================================================
+    // INPUTS
+    // ============================================================
 
-  double pedal = convert_pedal_position(frontbox_driver_input.pedal_position);
-  double steering_angle_deg = ((double)steering_wheel.steering_wheel_position /135 * 50) * -1;
+    const double pedal = std::clamp(
+        convert_pedal_position(frontbox_driver_input.pedal_position),
+        0.0,
+        1.0);
 
-  double w_fl = convert_wheel_speed(speed_fl);
-  double w_fr = convert_wheel_speed(speed_fr);
-  double w_rl = convert_wheel_speed(speed_rl);
-  double w_rr = convert_wheel_speed(speed_rr);
+    const double steering_angle_deg =
+        ((double)steering_wheel.steering_wheel_position / 135.0 * 50.0) * -1.0;
 
-  double delta_l_rad = 0.0;
-  double delta_r_rad = 0.0;
-  convert_steering_angle(steering_angle_deg, delta_l_rad, delta_r_rad);
-  
-  double vx_est = 1.0;
-  double vy_est = 0.0;
-  estimate_velocity_ekf(ax, ay, yaw_rate, w_fl, w_fr, w_rl, w_rr, delta_l_rad, delta_r_rad, vx_est, vy_est);
-  double delta_avg_rad = (delta_l_rad + delta_r_rad) / 2.0;
-  double yaw_rate_ref = yaw_rate > 0 ? yaw_rate + 0.2 : yaw_rate - 0.2;//referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
-  double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
-  calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
 
-  double manual_torque = pedal * MAX_MOMENT;
+    // ============================================================
+    // WHEEL SPEEDS
+    // ============================================================
 
-  ControlMode prev_mode = control_mode;
+    const double w_fl = convert_wheel_speed(speed_fl);
+    const double w_fr = convert_wheel_speed(speed_fr);
+    const double w_rl = convert_wheel_speed(speed_rl);
+    const double w_rr = convert_wheel_speed(speed_rr);
 
-  switch (control_mode) {
-    case ControlMode::MANUAL:
-      if (vx_est >= SPEED_WARMUP) control_mode = ControlMode::WARMUP;
-      break;
-    case ControlMode::WARMUP:
-      if (vx_est < SPEED_WARMUP) { control_mode = ControlMode::MANUAL; is_initialized = false; }
-      else if (vx_est >= SPEED_ENTER_NMPC) { control_mode = ControlMode::BLEND_IN; }
-      break;
-    case ControlMode::BLEND_IN:
-      blend_alpha += dt / BLEND_DURATION_S;
-      if (blend_alpha >= 1.0) { blend_alpha = 1.0; control_mode = ControlMode::NMPC; }
-      if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
-      break;
-    case ControlMode::NMPC:
-      if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
-      break;
-    case ControlMode::BLEND_OUT:
-      blend_alpha -= dt / BLEND_DURATION_S;
-      if (blend_alpha <= 0.0) { blend_alpha = 0.0; control_mode = ControlMode::WARMUP; }
-      if (vx_est >= SPEED_ENTER_NMPC) control_mode = ControlMode::BLEND_IN;
-      break;
-  }
 
-  if (control_mode != prev_mode) {
-    RCLCPP_INFO(this->get_logger(),
-        "State machine: %s -> %s | vx_est=%.2f blend_alpha=%.2f",
-        controlModeToString(prev_mode), controlModeToString(control_mode),
-        vx_est, blend_alpha);
-  }
+    // ============================================================
+    // STEERING
+    // ============================================================
 
-  bool solver_active = (control_mode != ControlMode::MANUAL);
+    double delta_l_rad = 0.0;
+    double delta_r_rad = 0.0;
 
-  // Low speed mode z manualnym sterowaniem momentem
-  if (!solver_active) {
+    convert_steering_angle(
+        steering_angle_deg,
+        delta_l_rad,
+        delta_r_rad);
 
-    tau_final[0] = manual_torque;
-    tau_final[1] = manual_torque;
-    tau_final[2] = manual_torque;
-    tau_final[3] = manual_torque;
 
-    prev_tau_nmpc[0] = manual_torque;
-    prev_tau_nmpc[1] = manual_torque;
-    prev_tau_nmpc[2] = manual_torque;
-    prev_tau_nmpc[3] = manual_torque;
+    // ============================================================
+    // VEHICLE SPEED ESTIMATION
+    // ============================================================
 
+    double vx_est = 0.0;
+    double vy_est = 0.0;
+
+    estimate_velocity_ekf(
+        ax,
+        ay,
+        yaw_rate,
+        w_fl,
+        w_fr,
+        w_rl,
+        w_rr,
+        delta_l_rad,
+        delta_r_rad,
+        vx_est,
+        vy_est);
+
+
+    // ============================================================
+    // AUX DATA - tylko do diagnostyki / publikacji
+    // ============================================================
+
+    const double yaw_rate_ref =
+        yaw_rate > 0.0
+        ? yaw_rate + 0.2
+        : yaw_rate - 0.2;
+
+    double fz_fl = 0.0;
+    double fz_fr = 0.0;
+    double fz_rl = 0.0;
+    double fz_rr = 0.0;
+
+    calculate_load_transfer(
+        ax,
+        ay,
+        fz_fl,
+        fz_fr,
+        fz_rl,
+        fz_rr);
+
+
+    // ============================================================
+    // MANUAL TORQUE
+    // ============================================================
+
+    const double manual_torque =
+        pedal * MAX_MOMENT;
+
+
+    // ============================================================
+    // MODE SELECTION
+    //
+    // TYLKO:
+    //
+    // MANUAL
+    //     |
+    //     | pedal >= 75%
+    //     v
+    // SPEED_HOLD
+    //     |
+    //     | pedal <= 70%
+    //     v
+    // MANUAL
+    //
+    // MPC JEST CAŁKOWICIE IGNOROWANE
+    // ============================================================
+
+    const ControlMode prev_mode = control_mode;
+
+
+    if (control_mode == ControlMode::SPEED_HOLD)
+    {
+        // Wyjście z HOLD z histerezą
+        if (pedal <= SPEED_HOLD_PEDAL_OFF)
+        {
+            control_mode = ControlMode::MANUAL;
+
+            speed_hold_integral = 0.0;
+            speed_hold_prev_torque = manual_torque;
+        }
+    }
+    else
+    {
+        control_mode = ControlMode::MANUAL;
+
+        if (pedal >= SPEED_HOLD_PEDAL_ON)
+        {
+            control_mode = ControlMode::SPEED_HOLD;
+
+            speed_hold_integral = 0.0;
+
+            const double initial_error =
+                speed_hold_target_mps - vx_est;
+
+            speed_hold_prev_torque = std::clamp(
+                speed_hold_kp * initial_error,
+                0.0,
+                MAX_MOMENT);
+        }
+    }
+
+
+    // ACADOS/NMPC jest w tym branchu całkowicie nieużywany.
+    // Jeżeli kiedyś go znowu włączymy, będzie wymagał cold start.
     is_initialized = false;
-  }
-  else {
 
-    double t_ref = manual_torque * 4; 
 
-    p_val[0] = yaw_rate_ref; 
-    p_val[1] = delta_l_rad;
-    p_val[2] = delta_r_rad;
-    p_val[3] = fz_fl;
-    p_val[4] = fz_fr;
-    p_val[5] = fz_rl;
-    p_val[6] = fz_rr;
-    p_val[7] = t_ref;
+    // ============================================================
+    // MODE CHANGE LOG
+    // ============================================================
 
-    for (int i = 0; i <= TV_NMPC_N; i++) {
-      tv_nmpc_acados_update_params(acados_capsule, i, p_val, 8);
+    if (control_mode != prev_mode)
+    {
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Control mode: %s -> %s | pedal=%.1f%% | vx=%.2f m/s | target=%.2f m/s",
+            controlModeToString(prev_mode),
+            controlModeToString(control_mode),
+            pedal * 100.0,
+            vx_est,
+            speed_hold_target_mps);
     }
 
-    // Przygotowanie bufora stanu x0
-    lbx0[0] = vx_est; ubx0[0] = vx_est;
-    lbx0[1] = vy_est; ubx0[1] = vy_est;
-    lbx0[2] = yaw_rate; ubx0[2] = yaw_rate;
-    lbx0[3] = w_fl; ubx0[3] = w_fl;
-    lbx0[4] = w_fr; ubx0[4] = w_fr;
-    lbx0[5] = w_rl; ubx0[5] = w_rl;
-    lbx0[6] = w_rr; ubx0[6] = w_rr;
-    
-    // Feedback stanów wewnętrznych
-    lbx0[7] = tau_final[0]; ubx0[7] = tau_final[0];
-    lbx0[8] = tau_final[1]; ubx0[8] = tau_final[1];
-    lbx0[9] = tau_final[2]; ubx0[9] = tau_final[2];
-    lbx0[10]= tau_final[3]; ubx0[10]= tau_final[3];
 
-    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "lbx", lbx0);
-    ocp_nlp_constraints_model_set(nlp_config, nlp_dims, nlp_in, nlp_out, 0, "ubx", ubx0);
+    // ============================================================
+    // TORQUE CONTROL
+    // ============================================================
 
-    // COLD START 
-    if (!is_initialized) {
-      double x_init[TV_NMPC_NX] = {vx_est, vy_est, yaw_rate, w_fl, w_fr, w_rl, w_rr, 
-                                   tau_final[0], tau_final[1], tau_final[2], tau_final[3]};
-      double u_init[TV_NMPC_NU] = {0.0, 0.0, 0.0, 0.0};
+    if (control_mode == ControlMode::SPEED_HOLD)
+    {
+        // --------------------------------------------------------
+        // SPEED HOLD
+        //
+        // PI wylicza wspólny żądany moment.
+        // Następnie TC ogranicza każde koło osobno.
+        // --------------------------------------------------------
 
-      for (int i = 0; i < TV_NMPC_N; i++) {
-        ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, i, "x", x_init);
-        ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, i, "u", u_init);
-      }
-      ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, TV_NMPC_N, "x", x_init);
-      is_initialized = true;
+        const double torque_cmd =
+            calculate_speed_hold_torque(vx_est);
+
+        const double wheel_omega[4] = {
+            w_fl,
+            w_fr,
+            w_rl,
+            w_rr
+        };
+
+        for (int i = 0; i < 4; ++i)
+        {
+            tau_final[i] = apply_tc_limit(
+                torque_cmd,
+                vx_est,
+                wheel_omega[i],
+                pedal);
+        }
+
+
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            250,
+            "SPEED HOLD | target=%.2f m/s | vx=%.2f m/s | error=%+.2f m/s | torque=%.2f Nm | pedal=%.1f%%",
+            speed_hold_target_mps,
+            vx_est,
+            speed_hold_target_mps - vx_est,
+            torque_cmd,
+            pedal * 100.0);
     }
-    
-    // SOLVE
-    int status = tv_nmpc_acados_solve(acados_capsule);
-    
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> elapsed_ms = end_time - start_time;
+    else
+    {
+        // --------------------------------------------------------
+        // MANUAL
+        //
+        // Żadnego MPC, żadnego blendingu.
+        // Gaz -> moment.
+        // --------------------------------------------------------
 
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500, 
-        "Czas NMPC: %.3f ms | Status: %d", elapsed_ms.count(), status);
-    
-    if (status != 0) {
-    RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 500, "NMPC Fail. Przytrzymanie momentu.");
-    is_initialized = false;
+        tau_final[0] = manual_torque;
+        tau_final[1] = manual_torque;
+        tau_final[2] = manual_torque;
+        tau_final[3] = manual_torque;
+
+
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            500,
+            "MANUAL | pedal=%.1f%% | torque=%.2f Nm | vx=%.2f m/s",
+            pedal * 100.0,
+            manual_torque,
+            vx_est);
     }
-    else {
 
-      // Pobranie zoptymalizowanych momentów
-      ocp_nlp_out_get(nlp_config, nlp_dims, nlp_out, 1, "x", x_k1);
-      prev_tau_nmpc[0] = x_k1[7]; 
-      prev_tau_nmpc[1] = x_k1[8]; 
-      prev_tau_nmpc[2] = x_k1[9]; 
-      prev_tau_nmpc[3] = x_k1[10];
 
-      // TC
-      double w_actual[4] = {w_fl, w_fr, w_rl, w_rr};
-      
-      for (int i = 0; i < 4; i++) {
-          double blended = (1.0 - blend_alpha) * manual_torque + blend_alpha * prev_tau_nmpc[i];
+    // ============================================================
+    // SAFETY - puszczenie pedału = zero momentu
+    // ============================================================
 
-          double max_safe_v_wheel = (vx_est * kappa_limit);
-          if (enable_tc && pedal > 0.05) {
-              double current_v_wheel = w_actual[i] * R_e;
-              double dynamic_max_torque = MAX_MOMENT;
-              if (current_v_wheel > max_safe_v_wheel) {
-                  double speed_excess = current_v_wheel - max_safe_v_wheel;
-                  dynamic_max_torque = std::max(0.0, MAX_MOMENT - speed_excess * 80.0);
-              }
-              tau_final[i] = std::clamp(blended, 0.0, dynamic_max_torque);
-          } else {
-              tau_final[i] = std::clamp(blended, 0.0, MAX_MOMENT);
-          }
-      }
+    if (pedal < 0.01)
+    {
+        tau_final[0] = 0.0;
+        tau_final[1] = 0.0;
+        tau_final[2] = 0.0;
+        tau_final[3] = 0.0;
+
+        // Na wszelki wypadek czyścimy regulator.
+        speed_hold_integral = 0.0;
+        speed_hold_prev_torque = 0.0;
     }
-  }
-  
-  if (pedal < 0.01) {
-    tau_final[0] = 0.0;
-    tau_final[1] = 0.0;
-    tau_final[2] = 0.0;
-    tau_final[3] = 0.0;
-  }
 
-  // Publikacja 
-  yaw_ref.yaw_rate_ref = yaw_rate_ref; 
-  yaw_ref.vx_est = vx_est;
-  yaw_ref.vy_est = vy_est;
-  yaw_ref.filtered_ax = ax;
-  yaw_ref.filtered_ay = ay;
-  yaw_ref.fz_fl = fz_fl;
-  yaw_ref.fz_fr = fz_fr;
-  yaw_ref.fz_rl = fz_rl;
-  yaw_ref.fz_rr = fz_rr;
-  yaw_rate_ref_publisher->publish(yaw_ref);
 
-  setpoints.front_left.torque = convert_torque(tau_final[0]);
-  setpoints.front_right.torque = convert_torque(tau_final[1]);
-  setpoints.rear_left.torque = convert_torque(tau_final[2]);
-  setpoints.rear_right.torque = convert_torque(tau_final[3]);
-  setpoints_publisher->publish(setpoints);
+    // ============================================================
+    // DIAGNOSTICS
+    // ============================================================
+
+    yaw_ref.yaw_rate_ref = yaw_rate_ref;
+    yaw_ref.vx_est = vx_est;
+    yaw_ref.vy_est = vy_est;
+    yaw_ref.filtered_ax = ax;
+    yaw_ref.filtered_ay = ay;
+
+    yaw_ref.fz_fl = fz_fl;
+    yaw_ref.fz_fr = fz_fr;
+    yaw_ref.fz_rl = fz_rl;
+    yaw_ref.fz_rr = fz_rr;
+
+    yaw_rate_ref_publisher->publish(yaw_ref);
+
+
+    // ============================================================
+    // OUTPUT
+    // ============================================================
+
+    setpoints.front_left.torque =
+        convert_torque(tau_final[0]);
+
+    setpoints.front_right.torque =
+        convert_torque(tau_final[1]);
+
+    setpoints.rear_left.torque =
+        convert_torque(tau_final[2]);
+
+    setpoints.rear_right.torque =
+        convert_torque(tau_final[3]);
+
+    setpoints_publisher->publish(setpoints);
 }
 
 inline double Controller::convert_pedal_position(int16_t pedal_position) {
@@ -649,7 +780,99 @@ inline void Controller::estimate_velocity_ekf(double ax, double ay, double r, do
     vy_est = std::tanh(ekf_x(1) / 2.0);
 }
 
+inline double Controller::calculate_speed_hold_torque(double vx)
+{
+    const double error = speed_hold_target_mps - vx;
 
+    // limit integratora odpowiada mniej więcej maksymalnemu momentowi
+    const double integral_limit =
+        (speed_hold_ki > 1e-6)
+        ? MAX_MOMENT / speed_hold_ki
+        : 0.0;
+
+    double integral_candidate =
+        speed_hold_integral + error * dt;
+
+    if (speed_hold_ki > 1e-6) {
+        integral_candidate = std::clamp(
+            integral_candidate,
+            -integral_limit,
+             integral_limit);
+    }
+
+    const double unsaturated =
+        speed_hold_kp * error +
+        speed_hold_ki * integral_candidate;
+
+    // anti-windup
+    const bool inside_limits =
+        (unsaturated >= 0.0 && unsaturated <= MAX_MOMENT);
+
+    const bool leaving_upper_saturation =
+        (unsaturated > MAX_MOMENT && error < 0.0);
+
+    const bool leaving_lower_saturation =
+        (unsaturated < 0.0 && error > 0.0);
+
+    if (inside_limits ||
+        leaving_upper_saturation ||
+        leaving_lower_saturation)
+    {
+        speed_hold_integral = integral_candidate;
+    }
+
+    double torque =
+        speed_hold_kp * error +
+        speed_hold_ki * speed_hold_integral;
+
+    torque = std::clamp(torque, 0.0, MAX_MOMENT);
+
+    // ograniczenie skoku momentu
+    const double max_step = speed_hold_torque_slew * dt;
+
+    torque = std::clamp(
+        torque,
+        std::max(0.0, speed_hold_prev_torque - max_step),
+        std::min(MAX_MOMENT, speed_hold_prev_torque + max_step));
+
+    speed_hold_prev_torque = torque;
+
+    return torque;
+}
+
+inline double Controller::apply_tc_limit(
+    double torque,
+    double vx,
+    double wheel_omega,
+    double pedal)
+{
+    double dynamic_max_torque = MAX_MOMENT;
+
+    if (enable_tc && pedal > 0.05) {
+
+        const double current_v_wheel =
+            wheel_omega * R_e;
+
+        const double max_safe_v_wheel =
+            vx * kappa_limit;
+
+        if (current_v_wheel > max_safe_v_wheel) {
+
+            const double speed_excess =
+                current_v_wheel - max_safe_v_wheel;
+
+            dynamic_max_torque =
+                std::max(
+                    0.0,
+                    MAX_MOMENT - speed_excess * 80.0);
+        }
+    }
+
+    return std::clamp(
+        torque,
+        0.0,
+        dynamic_max_torque);
+}
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
