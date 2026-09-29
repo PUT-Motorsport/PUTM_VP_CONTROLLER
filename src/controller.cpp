@@ -122,6 +122,10 @@ class Controller : public rclcpp::Node {
 
   const double kappa_limit = 1.05;
 
+
+    double tau_prev[4] = {0.0, 0.0, 0.0, 0.0};  
+
+
   // EKF
   Eigen::Vector2d ekf_x;
   Eigen::Matrix2d ekf_P;
@@ -300,6 +304,10 @@ void Controller::control_loop() {
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
 
 
+  constexpr double MAX_DTAU = 40.0;   // 80/s przy pętli 10 ms
+  auto velocity_set = 5.0; // velocity in [m/s]
+
+
 
     tau_final[0] = 0.0;
     tau_final[1] = 0.0;
@@ -316,7 +324,6 @@ void Controller::control_loop() {
     }
 
   if(pedal > 0.05){ // regulator PI
-    auto velocity_set = 5.0; // velocity in [m/s]
 
     // ---------- FL ----------
     double hi_fl = std::min(TAU_MAX, tau_prev[0] + MAX_DTAU);
