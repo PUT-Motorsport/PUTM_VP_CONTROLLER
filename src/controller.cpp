@@ -276,15 +276,15 @@ void Controller::control_loop() {
 
   double gain_const = 1.0;
   // pi settings
-  double Kpro_fr = 174.14 * gain_const;
-  double Kpro_fl = 203.53 * gain_const;
-  double Kpro_rr = 139.0 * gain_const;
-  double Kpro_rl = 59.26 * gain_const;
+  double Kpro_fr = 87.14 * gain_const;
+  double Kpro_fl = 102.53 * gain_const;
+  double Kpro_rr = 70.0 * gain_const;
+  double Kpro_rl = 80.26 * gain_const;
 
-  double Kint_fr = 540.79 * gain_const;
-  double Kint_fl = 278.43 * gain_const;
-  double Kint_rr = 430.35 * gain_const;
-  double Kint_rl = 85.01 * gain_const;
+  double Kint_fr = 270.79 * gain_const;
+  double Kint_fl = 139.43 * gain_const;
+  double Kint_rr = 215.35 * gain_const;
+  double Kint_rl = 240.01 * gain_const;
 
 
 
@@ -316,49 +316,58 @@ void Controller::control_loop() {
     }
 
   if(pedal > 0.05){ // regulator PI
-    auto velocity_set = 1.0; // velocity in [m/s]
+    auto velocity_set = 5.0; // velocity in [m/s]
 
+    // ---------- FL ----------
+    double hi_fl = std::min(TAU_MAX, tau_prev[0] + MAX_DTAU);
     auto velocity_front_left_error = velocity_set - (speed_fl * RPM_TO_MPS);
     tau_final[0] = Kpro_fl * velocity_front_left_error + Kint_fl * integral_front_left;
-    bool sat_fl = (tau_final[0] >= TAU_MAX && velocity_front_left_error > 0) ||
+    bool sat_fl = (tau_final[0] >= hi_fl && velocity_front_left_error > 0) ||
                   (tau_final[0] <= TAU_MIN && velocity_front_left_error < 0);
     if (!sat_fl) {
         integral_front_left += velocity_front_left_error * refresh_rate;
         tau_final[0] = Kpro_fl * velocity_front_left_error + Kint_fl * integral_front_left;
     }
-    tau_final[0] = std::clamp(tau_final[0], TAU_MIN, TAU_MAX);
+    tau_final[0] = std::clamp(tau_final[0], TAU_MIN, hi_fl);
 
+    // ---------- FR ----------
+    double hi_fr = std::min(TAU_MAX, tau_prev[1] + MAX_DTAU);
     auto velocity_front_right_error = velocity_set - (speed_fr * RPM_TO_MPS);
     tau_final[1] = Kpro_fr * velocity_front_right_error + Kint_fr * integral_front_right;
-    bool sat_fr = (tau_final[1] >= TAU_MAX && velocity_front_right_error > 0) ||
+    bool sat_fr = (tau_final[1] >= hi_fr && velocity_front_right_error > 0) ||
                   (tau_final[1] <= TAU_MIN && velocity_front_right_error < 0);
     if (!sat_fr) {
         integral_front_right += velocity_front_right_error * refresh_rate;
         tau_final[1] = Kpro_fr * velocity_front_right_error + Kint_fr * integral_front_right;
     }
-    tau_final[1] = std::clamp(tau_final[1], TAU_MIN, TAU_MAX);
+    tau_final[1] = std::clamp(tau_final[1], TAU_MIN, hi_fr);
 
+    // ---------- RL ----------
+    double hi_rl = std::min(TAU_MAX, tau_prev[2] + MAX_DTAU);
     auto velocity_rear_left_error = velocity_set - (speed_rl * RPM_TO_MPS);
     tau_final[2] = Kpro_rl * velocity_rear_left_error + Kint_rl * integral_rear_left;
-    bool sat_rl = (tau_final[2] >= TAU_MAX && velocity_rear_left_error > 0) ||
+    bool sat_rl = (tau_final[2] >= hi_rl && velocity_rear_left_error > 0) ||
                   (tau_final[2] <= TAU_MIN && velocity_rear_left_error < 0);
     if (!sat_rl) {
         integral_rear_left += velocity_rear_left_error * refresh_rate;
         tau_final[2] = Kpro_rl * velocity_rear_left_error + Kint_rl * integral_rear_left;
     }
-    tau_final[2] = std::clamp(tau_final[2], TAU_MIN, TAU_MAX);
+    tau_final[2] = std::clamp(tau_final[2], TAU_MIN, hi_rl);
 
+    // ---------- RR ----------
+    double hi_rr = std::min(TAU_MAX, tau_prev[3] + MAX_DTAU);
     auto velocity_rear_right_error = velocity_set - (speed_rr * RPM_TO_MPS);
     tau_final[3] = Kpro_rr * velocity_rear_right_error + Kint_rr * integral_rear_right;
-    bool sat_rr = (tau_final[3] >= TAU_MAX && velocity_rear_right_error > 0) ||
+    bool sat_rr = (tau_final[3] >= hi_rr && velocity_rear_right_error > 0) ||
                   (tau_final[3] <= TAU_MIN && velocity_rear_right_error < 0);
     if (!sat_rr) {
         integral_rear_right += velocity_rear_right_error * refresh_rate;
         tau_final[3] = Kpro_rr * velocity_rear_right_error + Kint_rr * integral_rear_right;
     }
-    tau_final[3] = std::clamp(tau_final[3], TAU_MIN, TAU_MAX);
-    
+    tau_final[3] = std::clamp(tau_final[3], TAU_MIN, hi_rr);
   }
+
+  for (int i = 0; i < 4; i++) tau_prev[i] = tau_final[i];
 
   setpoints.front_left.torque = -tau_final[0];
   setpoints.front_right.torque = tau_final[1];
