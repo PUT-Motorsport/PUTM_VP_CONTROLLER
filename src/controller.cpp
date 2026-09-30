@@ -115,6 +115,9 @@ class Controller : public rclcpp::Node {
 
   // TC
   double tau_final[4];
+    double tau_final[4] = {0.0, 0.0, 0.0, 0.0};  
+  int TAU_STEP_COUNTER = 0;
+
   double prev_tau_nmpc[4];
 
   // Parametry TC
@@ -293,35 +296,37 @@ void Controller::control_loop() {
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
 
 
-  constexpr double MAX_DTAU = 40.0;   // max wzrostu momentu na jedną iterację 0.01s
+  constexpr double MAX_DTAU = 50.0;   // max wzrostu momentu na jedną iterację 0.01s
   auto velocity_set = 5.0; // velocity in [m/s]
 
 
 
-    tau_final[0] = 0.0;
-    tau_final[1] = 0.0;
-    tau_final[2] = 0.0;
-    tau_final[3] = 0.0;
-
 
 
     if(pedal <= 0.05){
-    integral_front_left  = 0.0;
-    integral_front_right = 0.0;
-    integral_rear_left   = 0.0;
-    integral_rear_right  = 0.0;
+    TAU_STEP_COUNTER = 0;
+    tau_final[0] = 0.0;
+
+    tau_final[1] = 0.0;
+
+    tau_final[2] = 0.0;
+
+    tau_final[3] = 0.0;
+
     }
 
   if(pedal > 0.05){
 
+    double tau_goal = 300.0;
+    TAU_STEP_COUNTER ++;
 
-    tau_final[0] = std::clamp(tau_final[0], TAU_MIN, hi_fl);
+    tau_final[0] = std::clamp(tau_goal, TAU_MIN, MAX_DTAU* TAU_STEP_COUNTER);
 
-    tau_final[1] = std::clamp(tau_final[1], TAU_MIN, hi_fr);
+    tau_final[1] = std::clamp(tau_goal, TAU_MIN, MAX_DTAU* TAU_STEP_COUNTER);
 
-    tau_final[2] = std::clamp(tau_final[2], TAU_MIN, hi_rl);
+    tau_final[2] = std::clamp(tau_goal, TAU_MIN, MAX_DTAU* TAU_STEP_COUNTER);
 
-    tau_final[3] = std::clamp(tau_final[3], TAU_MIN, hi_rr);
+    tau_final[3] = std::clamp(tau_goal, TAU_MIN, MAX_DTAU* TAU_STEP_COUNTER);
   }
 
   for (int i = 0; i < 4; i++) tau_prev[i] = tau_final[i];
