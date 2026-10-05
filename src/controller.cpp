@@ -236,31 +236,32 @@ void Controller::control_loop() {
     tv_code_P.ay_Value = ay;
     tv_code_P.Mz_p=300;
     tv_code_P.Mz_I=30;
-    tv_code_P.Ku=-1/2000;
+    tv_code_P.Ku=-1/150;
     // tv_code_P.power_speed_limiter_switch_Thre = 100000000;
     
     tv_code_step();
 
-    // torque_fl = tv_code_P.acc_pedal_Value;
-    // torque_fr = tv_code_P.acc_pedal_Value;
-    // torque_rl = tv_code_P.acc_pedal_Value;
-    // torque_rr = tv_code_P.acc_pedal_Value;
+    torque_fl = tv_code_P.acc_pedal_Value;
+    torque_fr = tv_code_P.acc_pedal_Value;
+    torque_rl = tv_code_P.acc_pedal_Value;
+    torque_rr = tv_code_P.acc_pedal_Value;
 
-    torque_fl = tv_code_B.trq_fl / tv_code_P.drive_ratio ;
-    torque_fr = tv_code_B.trq_fr / tv_code_P.drive_ratio;
-    torque_rl = tv_code_B.trq_rl / tv_code_P.drive_ratio ;
-    torque_rr = tv_code_B.trq_rr / tv_code_P.drive_ratio ;
+    // torque_fl = tv_code_B.trq_fl / tv_code_P.drive_ratio ;
+    // torque_fr = tv_code_B.trq_fr / tv_code_P.drive_ratio;
+    // torque_rl = tv_code_B.trq_rl / tv_code_P.drive_ratio ;
+    // torque_rr = tv_code_B.trq_rr / tv_code_P.drive_ratio ;
 
-    torque_fl/=tv_code_P.max_moment;
-    torque_fr/=tv_code_P.max_moment;
-    torque_rl/=tv_code_P.max_moment;
-    torque_rr/=tv_code_P.max_moment;
+    // torque_fl/=tv_code_P.max_moment;
+    // torque_fr/=tv_code_P.max_moment;
+    // torque_rl/=tv_code_P.max_moment;
+    // torque_rr/=tv_code_P.max_moment;
 
     
 
 
     auto setpoints = Setpoints();
     auto vpdata = YawRef();
+    vpdata.yaw_rate_ref = tv_code_B.Saturation_j;
     // vpdata.est_power = tv_code_B.est_power;
     // vpdata.torque_fixed = tv_code_B.torque_fixed;
     // vpdata.ifl = tv_code_B.T_max;
@@ -275,8 +276,6 @@ void Controller::control_loop() {
     setpoints.front_left.torque = convert_torque(torque_fl)* -1;
     setpoints.front_right.torque = convert_torque(torque_fr);
     setpoints.rear_left.torque = convert_torque(torque_rl);
-    // setpoints.rear_right.torque = convert_torque(torque_rr)* -1;
-    //michal
     setpoints.rear_right.torque = convert_torque(torque_rr);
 
 
