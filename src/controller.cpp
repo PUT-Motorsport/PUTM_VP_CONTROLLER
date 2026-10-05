@@ -129,6 +129,7 @@ Controller::Controller()
       // vn300_rate_of_turn_subscriber(this->create_subscription<vectornav_msgs::msg::ImuGroup>("vectornav/raw/imu", 1,  std::bind(&Controller::vn300_rate_of_turn_callback, this, _1))),
       bms_hv_main_subscriber(this->create_subscription<BmsHvMain>("putm_vcl/bms_hv_main", 1,  std::bind(&Controller::bms_hv_main_callback, this, _1))),
       speed_fl(0), speed_fr(0), speed_rl(0), speed_rr(0),
+      control_loop_timer(this->create_wall_timer(10ms, std::bind(&Controller::control_loop, this))),
       ay(0.0), ax(0.0), yaw_rate(0.0), batt_curr(0.0)
       {
         rclcpp::QoS qos(1);
