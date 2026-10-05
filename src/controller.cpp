@@ -6,6 +6,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "putm_vcl_interfaces/msg/yaw_ref.hpp"
 #include "geometry_msgs/msg/vector3_stamped.hpp"
+#include <Eigen/Dense>
 
 // #include "putm_vcl_interfaces/msg/xsens_acceleration.hpp"
 // #include "putm_vcl_interfaces/msg/xsens_rate_of_turn.hpp"
@@ -15,6 +16,8 @@ extern "C" {
 #include "read.h"
 #include "tv_code.h"
 }
+
+constexpr double Ku = 1.0/150.0;
 
 using namespace std::chrono_literals;
 using namespace putm_vcl_interfaces::msg;
@@ -55,6 +58,17 @@ class Controller : public rclcpp::Node {
   const double a1 = -1.69972730;
   const double a2 = 0.73926403;
 
+  // EKF
+  Eigen::Vector2d ekf_x;
+  Eigen::Matrix2d ekf_P;
+  Eigen::Matrix2d ekf_Q;
+  Eigen::Matrix2d ekf_I;
+
+  const double R_e = 0.193;
+  const double dt = 0.01;
+
+  inline void estimate_velocity_ekf(double ax, double ay, double r, double w_fl, double w_fr, double w_rl, double w_rr, double delta_l, double delta_r, double &vx_est, double &vy_est);
+
   rclcpp::Publisher<Setpoints>::SharedPtr setpoints_publisher;
   rclcpp::Publisher<YawRef>::SharedPtr yaw_rate_ref_publisher;
   rclcpp::Subscription<FrontboxDriverInput>::SharedPtr frontbox_driver_input_subscriber;
@@ -79,6 +93,7 @@ class Controller : public rclcpp::Node {
   inline int32_t convert_torque(double torque);
   inline double convert_wheel_speed(double rpm);
   inline void convert_steering_angle(double steering_wheel_deg, double &delta_l_rad, double &delta_r_rad);
+  inline double referenceYawRate(double vx, double delta_deg);
 
   double speed_fl, speed_fr, speed_rl, speed_rr;
   double ay, ax, yaw_rate, batt_curr;
@@ -142,6 +157,10 @@ Controller::Controller()
         torque_fr = 0;
         torque_rl = 0;
         torque_rr = 0;
+
+        ekf_x << 0.0, 0.0;
+        ekf_P = Eigen::Matrix2d::Identity() * 0.1;
+        ekf_I = Eigen::Matrix2d::Identity();
       }
 
 Controller::~Controller() { tv_code_terminate(); }
@@ -208,44 +227,52 @@ void Controller::bms_hv_main_callback(const BmsHvMain msg) { batt_curr = msg.cur
 void Controller::control_loop() {
   if (rtmGetErrorStatus(tv_code_M) == (NULL) && !rtmGetStopRequested(tv_code_M)) {
     
-    tv_code_P.acc_pedal_Value = convert_pedal_position(frontbox_driver_input.pedal_position);
+    double pedal = convert_pedal_position(frontbox_driver_input.pedal_position);
+    double steering_angle_deg = ((double)steering_wheel.steering_wheel_position /135 * 50) * -1;
 
-    tv_code_P.delta_Value = ((double)steering_wheel.steering_wheel_position /135 * 50) * -1;
+    double w_fl = convert_wheel_speed(speed_fl);
+    double w_fr = convert_wheel_speed(speed_fr);
+    double w_rl = convert_wheel_speed(speed_rl);
+    double w_rr = convert_wheel_speed(speed_rr);
+
+    double delta_l_rad = 0.0;
+    double delta_r_rad = 0.0;
+    convert_steering_angle(steering_angle_deg, delta_l_rad, delta_r_rad);
+
+    double vx_est = 1.0;
+    double vy_est = 0.0;
+    estimate_velocity_ekf(ax, ay, yaw_rate, w_fl, w_fr, w_rl, w_rr, delta_l_rad, delta_r_rad, vx_est, vy_est);
+    double delta_avg_rad = (delta_l_rad + delta_r_rad) / 2.0;
+    double yaw_rate_ref = referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
 
 
-    tv_code_P.avg_min_speed_switch_CurrentSet = 1;
+    // The generated model embeds the speed switch threshold as 1.0.
 
+    tv_code_U.ax = ax;
+    tv_code_U.ay = ay;
+    tv_code_U.yaw_rate = yaw_rate;
+    tv_code_U.vx = vx_est;
+    tv_code_U.yaw_rate_ref = yaw_rate_ref;
+    tv_code_U.yaw_rate = yaw_rate;
+    tv_code_U.kp = 300;
+    tv_code_U.ki = 30;
+    tv_code_U.Inport7 = pedal * 11 * 9.8;
 
-    tv_code_P.whl_speed_fl_Value = speed_rl;
-    tv_code_P.whl_speed_fr_Value = speed_fr;
-    tv_code_P.whl_speed_rl_Value = speed_rl;
-    tv_code_P.whl_speed_rr_Value = speed_rr;
-
-    // tv_code_P.whl_speed_fl_Value = 1000;
-    // tv_code_P.whl_speed_fr_Value = 1000;
-    // tv_code_P.whl_speed_rl_Value = 1000;
-    // tv_code_P.whl_speed_rr_Value = 1000;
-
-    tv_code_P.speed_switch_Threshold = 0;
-
-    tv_code_P.TT_max_Value = 30;
-
-    tv_code_P.regen_switch_CurrentSetting = 1;
     // tv_code_P.batt_curr_Value = abs(batt_curr/100);
-    tv_code_P.yaw_rate_Value = yaw_rate;
-    tv_code_P.ax_Value = ax;
-    tv_code_P.ay_Value = ay;
-    tv_code_P.Mz_p=300;
-    tv_code_P.Mz_I=30;
-    tv_code_P.Ku=-1/150;
+    // tv_code_P.yaw_rate_Value = yaw_rate;
+    // tv_code_P.ax_Value = ax;
+    // tv_code_P.ay_Value = ay;
+    // tv_code_P.Mz_p=300;
+    // tv_code_P.Mz_I=30;
+    // tv_code_P.Ku=-1/150;
     // tv_code_P.power_speed_limiter_switch_Thre = 100000000;
     
     tv_code_step();
 
-    torque_fl = tv_code_P.acc_pedal_Value;
-    torque_fr = tv_code_P.acc_pedal_Value;
-    torque_rl = tv_code_P.acc_pedal_Value;
-    torque_rr = tv_code_P.acc_pedal_Value;
+    torque_fl = tv_code_Y.Outport / 11 / 9.8;
+    torque_fr = tv_code_Y.Outport1 / 11 / 9.8;
+    torque_rl = tv_code_Y.Outport2 / 11 / 9.8;
+    torque_rr = tv_code_Y.Outport3 / 11 / 9.8;
 
     // torque_fl = tv_code_B.trq_fl / tv_code_P.drive_ratio ;
     // torque_fr = tv_code_B.trq_fr / tv_code_P.drive_ratio;
@@ -262,7 +289,7 @@ void Controller::control_loop() {
 
     auto setpoints = Setpoints();
     auto vpdata = YawRef();
-    vpdata.yaw_rate_ref = tv_code_B.Saturation_j;
+    vpdata.yaw_rate_ref = yaw_rate_ref;
     // vpdata.est_power = tv_code_B.est_power;
     // vpdata.torque_fixed = tv_code_B.torque_fixed;
     // vpdata.ifl = tv_code_B.T_max;
@@ -274,7 +301,7 @@ void Controller::control_loop() {
     // vpdata.irr = tv_code_B.IRR;
     // vpdata.urr = tv_code_B.URR;
 
-    setpoints.front_left.torque = convert_torque(torque_fl)* -1;
+    setpoints.front_left.torque = convert_torque(torque_fl);
     setpoints.front_right.torque = convert_torque(torque_fr);
     setpoints.rear_left.torque = convert_torque(torque_rl);
     setpoints.rear_right.torque = convert_torque(torque_rr);
@@ -288,14 +315,165 @@ void Controller::control_loop() {
 }
 
 inline double Controller::convert_pedal_position(int16_t pedal_position) {
-  static constexpr double PEDAL_SCALER = 500.0;
+  static constexpr double PEDAL_SCALER = 450.0;
   return (((double)pedal_position) / PEDAL_SCALER);
 }
 
 
+inline void Controller::convert_steering_angle(double steering_wheel_deg, double &delta_l_rad, double &delta_r_rad) {
+  
+  double S_abs = std::abs(steering_wheel_deg);
+  
+  double inner_wheel = 0.000410 * S_abs * S_abs + 0.2554 * S_abs;
+  double outer_wheel = -0.0000942 * S_abs * S_abs + 0.2543 * S_abs;
+
+  if (steering_wheel_deg >= 0.0) {
+    delta_l_rad = inner_wheel;
+    delta_r_rad = outer_wheel;
+  } else {
+    delta_l_rad = -outer_wheel;
+    delta_r_rad = -inner_wheel;
+  }
+
+  // Konwersja na radiany
+  delta_l_rad *= (M_PI / 180.0);
+  delta_r_rad *= (M_PI / 180.0);
+}
+
 inline int32_t Controller::convert_torque(double torque) {
   static constexpr double TORQUE_SCALER = 1000.0;
   return (int32_t)(torque * TORQUE_SCALER);
+}
+
+inline double Controller::convert_wheel_speed(double rpm) {
+  
+  double gear_ratio = 11; 
+  return (rpm * (M_PI / 30.0)) / gear_ratio;
+}
+
+inline double Controller::referenceYawRate(double vx, double delta_deg)
+{
+    const double delta_wheel = (delta_deg * M_PI / 180.0);
+    const double denominator = 1.53 * (0.1 + Ku * vx * vx);
+
+    if (std::fabs(denominator) < 1e-6)
+        return 0.0;
+
+    const double yaw_rate = vx * delta_wheel / denominator;
+
+    return std::clamp(yaw_rate, -4.0, 4.0);
+}
+
+inline void Controller::estimate_velocity_ekf(double ax, double ay, double r, double w_fl, double w_fr, double w_rl, double w_rr, double delta_l, double delta_r, double &vx_est, double &vy_est) {
+
+    const double c   = 0.621;
+    const double b   = 0.765;
+
+    const double q_vx      = 5.50;
+    const double q_vy      = 0.00010;
+    const double r_wheels  = 0.005777;
+    const double r_yaw     = 0.007262;
+    const double r_zlvu    = 0.00969129;
+    const double ax_pen    = 0.006621;
+
+    Eigen::Matrix2d Q;
+    Q << q_vx, 0.0,
+         0.0,  q_vy;
+
+    double delta = (delta_l + delta_r) / 2.0;
+    double ax_safe = std::clamp(ax, -18.0, 18.0);
+    double ay_safe = std::clamp(ay, -20.0, 20.0);
+
+    // PREDYKCJA
+    Eigen::Vector2d x_pred;
+    x_pred(0) = ekf_x(0) + (ax_safe + ekf_x(1) * r) * dt;
+    x_pred(1) = ekf_x(1) + (ay_safe - ekf_x(0) * r) * dt;
+
+    Eigen::Matrix2d F;
+    F << 1.0,      r * dt,
+        -r * dt,   1.0;
+
+    Eigen::Matrix2d P_pred = F * ekf_P * F.transpose() + Q;
+
+    // POMIARY KÓŁ
+    Eigen::Vector4d z_wheels, z_pred_wheels;
+    z_wheels(0) = w_fl * R_e * std::cos(delta_l);
+    z_wheels(1) = w_fr * R_e * std::cos(delta_r);
+    z_wheels(2) = w_rl * R_e;
+    z_wheels(3) = w_rr * R_e;
+
+    z_pred_wheels(0) = x_pred(0) - r * c;
+    z_pred_wheels(1) = x_pred(0) + r * c;
+    z_pred_wheels(2) = x_pred(0) - r * c;
+    z_pred_wheels(3) = x_pred(0) + r * c;
+
+    Eigen::Vector4d y_wheels = z_wheels - z_pred_wheels;
+
+    // DETEKCJA TRYBU
+    double avg_wheel_speed = z_wheels.cwiseAbs().mean();
+    bool is_stopped  = (avg_wheel_speed < 0.1) && (x_pred(0) < 0.3);
+    bool is_straight = (std::abs(delta) < 0.03) && (std::abs(r) < 0.05);
+
+    Eigen::Matrix<double, 5, 1> z_full, z_pred_full;
+    z_full.head<4>()      = z_wheels;
+    z_pred_full.head<4>() = z_pred_wheels;
+    z_pred_full(4)        = x_pred(1);
+
+    Eigen::Matrix<double, 5, 2> H = Eigen::Matrix<double, 5, 2>::Zero();
+    H.col(0) << 1, 1, 1, 1, 0;
+    H.col(1) << 0, 0, 0, 0, 1;
+
+    Eigen::Matrix<double, 5, 5> R_adaptive = Eigen::Matrix<double, 5, 5>::Zero();
+
+    if (is_stopped) {
+        z_full(4)   = 0.0;
+        R_adaptive  = Eigen::Matrix<double, 5, 5>::Identity() * 1e-4;
+    } else {
+        int wheels_slipping = 0;
+        
+        for (int i = 0; i < 4; i++) {
+            double slip = 0.0;
+            if (x_pred(0) > 1.0) {
+                slip = std::abs(y_wheels(i)) / x_pred(0);
+            }
+            
+            if (slip > 0.4) {
+                wheels_slipping++;
+                R_adaptive(i, i) = 5.0; 
+            } else {
+                R_adaptive(i, i) = r_wheels + std::abs(ax_safe) * ax_pen;
+            }
+        }
+
+        if (wheels_slipping >= 3) {
+            for (int i = 0; i < 4; i++) {
+                R_adaptive(i, i) = 1.0;
+            }
+        }
+
+        // Pomiar boczny
+        if (is_straight) {
+            z_full(4)    = 0.0;
+            R_adaptive(4, 4) = r_zlvu;
+        } else {
+            z_full(4)    = r * b;
+            R_adaptive(4, 4) = r_yaw + std::abs(ay_safe) * 0.2;
+        }
+    }
+
+    // KOREKCJA
+    Eigen::Matrix<double, 5, 1> y = z_full - z_pred_full;
+    Eigen::Matrix<double, 5, 5> S = H * P_pred * H.transpose() + R_adaptive;
+    Eigen::Matrix<double, 2, 5> K = P_pred * H.transpose() * S.inverse();
+
+    ekf_x = x_pred + K * y;
+    ekf_P = (ekf_I - K * H) * P_pred;
+
+    // ZABEZPIECZENIA
+    if (ekf_x(0) < 0.0) ekf_x(0) = 0.0;
+
+    vx_est = ekf_x(0);
+    vy_est = std::tanh(ekf_x(1) / 2.0);
 }
 
 int main(int argc, char** argv) {
