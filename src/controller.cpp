@@ -269,7 +269,7 @@ void Controller::control_loop() {
   auto start_time = std::chrono::high_resolution_clock::now();
 
   double pedal = convert_pedal_position(frontbox_driver_input.pedal_position);
-  double steering_angle_deg = ((double)steering_wheel.steering_wheel_position /135 * 50) * -1;
+  double steering_angle_deg = ((double)steering_wheel.steering_wheel_position /135 * 50);
 
   double w_fl = convert_wheel_speed(speed_fl);
   double w_fr = convert_wheel_speed(speed_fr);
@@ -449,7 +449,7 @@ void Controller::control_loop() {
   yaw_ref.fz_rr = fz_rr;
   yaw_rate_ref_publisher->publish(yaw_ref);
 
-  setpoints.front_left.torque = convert_torque(tau_final[0]);
+  setpoints.front_left.torque = convert_torque(-tau_final[0]);
   setpoints.front_right.torque = convert_torque(tau_final[1]);
   setpoints.rear_left.torque = convert_torque(tau_final[2]);
   setpoints.rear_right.torque = convert_torque(tau_final[3]);
