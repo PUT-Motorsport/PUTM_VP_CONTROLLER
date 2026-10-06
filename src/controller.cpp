@@ -284,7 +284,6 @@ void Controller::control_loop() {
   double vy_est = 0.0;
   estimate_velocity_ekf(ax, ay, yaw_rate, w_fl, w_fr, w_rl, w_rr, delta_l_rad, delta_r_rad, vx_est, vy_est);
   double delta_avg_rad = (delta_l_rad + delta_r_rad) / 2.0;
-  vx_est = 10.0;
   double yaw_rate_ref = referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
   double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
