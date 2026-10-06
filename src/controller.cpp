@@ -17,7 +17,7 @@ extern "C" {
 #include "tv_code.h"
 }
 
-constexpr double Ku = 1.0/150.0;
+constexpr double Ku = 1.0/300.0;
 
 using namespace std::chrono_literals;
 using namespace putm_vcl_interfaces::msg;
