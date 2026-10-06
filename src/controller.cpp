@@ -15,14 +15,14 @@
 
  // Limity pod regulator na furę na kobyłkach (uniesionej w górzę)
 constexpr double TAU_MIN = 0.0;
-constexpr double TAU_MAX = 180.0;
+constexpr double TAU_MAX = 200.0;
 
 //Limity pod regulator na furę jeżdżącą
-constexpr double TAU_MIN_real = 0.0;
-constexpr double TAU_MAX_real = 500.0;
+// constexpr double TAU_MIN_real = 0.0;
+// constexpr double TAU_MAX_real = 500.0;
 
 //parametry kierownicy
-constexpr double Kierwonica_ratio = 0.3;
+// constexpr double Kierwonica_ratio = 0.3;
 
 
 // Parametry fizyczne bolidu:
@@ -50,6 +50,12 @@ constexpr double MAX_DTAU = 40.0; // Ograniczenie w zmianie Torque
 
 // Zmienne globalne - MONO MODE (CASE 2)
 constexpr double VELOCITY_SET_MONO_MODE = 5.0;
+
+// Zmienne globalne VECTORING MODE (CASE 3)
+constexpr double VECTORING_DIVIDER = 120.0;
+
+// Zmienne globalne - CZOŁG MODE (CASE 4)
+constexpr double CZOLG_DIVIDER = 45.0;
 
 
 
@@ -363,7 +369,8 @@ void Controller::control_loop() {
   
   double pedal_set_velocity = 0.0;
 
-  uint16_t SWITCH_KEY_MOTION_MODES = switch_key_motion_modes_;  // ros2 param set /controller switch_key_motion_modes 2
+  // uint16_t SWITCH_KEY_MOTION_MODES = switch_key_motion_modes_;  // ros2 param set /controller switch_key_motion_modes 2
+    const uint16_t SWITCH_KEY_MOTION_MODES = 3;
   // OBECNA WARTOSC -> ros2 param get /controller switch_key_motion_modes 
   /*
   ZERO MODE = 0 (0 TORQUE, CAR DOESN'T MOVE)
@@ -423,10 +430,10 @@ void Controller::control_loop() {
       break;
       case 3: 
         pedal_set_velocity = (pedal - 0.05)*30;
-        velocity_set_front_left = pedal_set_velocity;
-        velocity_set_front_right = pedal_set_velocity;
-        velocity_set_rear_left = pedal_set_velocity;
-        velocity_set_rear_right = pedal_set_velocity;
+        velocity_set_front_left = std::min(pedal_set_velocity,pedal_set_velocity+(steering_angle_deg/VECTORING_DIVIDER));
+        velocity_set_front_right = std::min(pedal_set_velocity,pedal_set_velocity-(steering_angle_deg/VECTORING_DIVIDER));
+        velocity_set_rear_left = std::min(pedal_set_velocity,pedal_set_velocity+(steering_angle_deg/VECTORING_DIVIDER));
+        velocity_set_rear_right = std::min(pedal_set_velocity,pedal_set_velocity-(steering_angle_deg/VECTORING_DIVIDER));
 
       break;
       default:
