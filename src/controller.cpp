@@ -361,6 +361,8 @@ void Controller::control_loop() {
   double Kint_rr = 215.35 * gain_const;
   double Kint_rl = 240.01 * gain_const;
   
+  double pedal_set_velocity = 0.0;
+
   uint16_t SWITCH_KEY_MOTION_MODES = switch_key_motion_modes_;  // ros2 param set /controller switch_key_motion_modes 2
   // OBECNA WARTOSC -> ros2 param get /controller switch_key_motion_modes 
   /*
@@ -420,11 +422,11 @@ void Controller::control_loop() {
 
       break;
       case 3: 
-        pedal_velocity = (pedal - 0.05)*30;
-        velocity_set_front_left = pedal_velocity;
-        velocity_set_front_right = pedal_velocity;
-        velocity_set_rear_left = pedal_velocity;
-        velocity_set_rear_right = pedal_velocity;
+        pedal_set_velocity = (pedal - 0.05)*30;
+        velocity_set_front_left = pedal_set_velocity;
+        velocity_set_front_right = pedal_set_velocity;
+        velocity_set_rear_left = pedal_set_velocity;
+        velocity_set_rear_right = pedal_set_velocity;
 
       break;
       default:
@@ -437,7 +439,7 @@ void Controller::control_loop() {
         if(pedal > 0.05){
 
           // ---------- FL ----------
-          auto velocity_front_right_error = velocity_set_front_left - (speed_fl * RPM_TO_MPS);
+          auto velocity_front_left_error = velocity_set_front_left - (speed_fl * RPM_TO_MPS);
 
           LOW_CLAMP = std::max(TAU_MIN, tau_prev[0] - MAX_DTAU);
           HIGH_CLAMP = std::min(TAU_MAX, tau_prev[0] + MAX_DTAU);  
