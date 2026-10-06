@@ -10,7 +10,7 @@
 
 // #include "putm_vcl_interfaces/msg/xsens_acceleration.hpp"
 // #include "putm_vcl_interfaces/msg/xsens_rate_of_turn.hpp"
-// #include "vectornav_msgs/msg/imu_group.hpp"
+#include "vectornav_msgs/msg/imu_group.hpp"
 
 constexpr double MAX_MOMENT = 100;
 constexpr double CAP_MOMENT = 100;
@@ -52,7 +52,7 @@ class Controller : public rclcpp::Node {
   rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr xsens_acceleration_subscriber;
   rclcpp::Subscription<geometry_msgs::msg::Vector3Stamped>::SharedPtr xsens_angular_velocity_subscriber;
 
-  // rclcpp::Subscription<vectornav_msgs::msg::ImuGroup>::SharedPtr vn300_rate_of_turn_subscriber;
+  rclcpp::Subscription<vectornav_msgs::msg::ImuGroup>::SharedPtr vn300_rate_of_turn_subscriber;
   rclcpp::Subscription<BmsHvMain>::SharedPtr bms_hv_main_subscriber;
   rclcpp::TimerBase::SharedPtr control_loop_timer;
 
@@ -151,7 +151,7 @@ class Controller : public rclcpp::Node {
   void xsens_acceleration_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg);
   void xsens_angular_velocity_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg);
 
-  // void vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup msg);
+  void vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup msg);
   void bms_hv_main_callback(const BmsHvMain msg);
 
   void control_loop();
@@ -172,7 +172,7 @@ Controller::Controller()
       // xsens_rate_of_turn_subscriber(this->create_subscription<XsensRateOfTurn>("putm_vcl/xsens_rate_of_turn", 1, std::bind(&Controller::xsens_rate_of_turn_callback, this, _1))),
       xsens_acceleration_subscriber(this->create_subscription<geometry_msgs::msg::Vector3Stamped>("/imu/acceleration", 1, std::bind(&Controller::xsens_acceleration_callback, this, _1))),
       xsens_angular_velocity_subscriber(this->create_subscription<geometry_msgs::msg::Vector3Stamped>("/imu/angular_velocity", 1, std::bind(&Controller::xsens_angular_velocity_callback, this, _1))),      
-      // vn300_rate_of_turn_subscriber(this->create_subscription<vectornav_msgs::msg::ImuGroup>("vectornav/raw/imu", 1,  std::bind(&Controller::vn300_rate_of_turn_callback, this, _1))),
+      vn300_rate_of_turn_subscriber(this->create_subscription<vectornav_msgs::msg::ImuGroup>("vectornav/raw/imu", 1,  std::bind(&Controller::vn300_rate_of_turn_callback, this, _1))),
       bms_hv_main_subscriber(this->create_subscription<BmsHvMain>("putm_vcl/bms_hv_main", 1,  std::bind(&Controller::bms_hv_main_callback, this, _1))),
       control_loop_timer(this->create_wall_timer(10ms, std::bind(&Controller::control_loop, this))),
       is_initialized(false),
@@ -219,8 +219,47 @@ void Controller::amk_actual_values4_callback(const AmkActualValues1 msg) { speed
 // void Controller::xsens_rate_of_turn_callback(const XsensRateOfTurn msg) { (void)msg; /* yaw_rate = msg.gyr_z; */ }
 
 void Controller::xsens_acceleration_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) {
-  double ax_raw = msg->vector.y;
-  double ay_raw = -msg->vector.x;
+  // double ax_raw = msg->vector.y;
+  // double ay_raw = -msg->vector.x;
+
+  // ax = b0*ax_raw + b1*ax_raw_prev1 + b2*ax_raw_prev2 - a1*ax_filt_prev1 - a2*ax_filt_prev2;
+
+  // ay = b0*ay_raw + b1*ay_raw_prev1 + b2*ay_raw_prev2 - a1*ay_filt_prev1 - a2*ay_filt_prev2;
+
+  // ax_raw_prev2 = ax_raw_prev1;
+  // ax_raw_prev1 = ax_raw;
+  // ax_filt_prev2 = ax_filt_prev1;
+  // ax_filt_prev1 = ax;
+
+  // ay_raw_prev2 = ay_raw_prev1;
+  // ay_raw_prev1 = ay_raw;
+  // ay_filt_prev2 = ay_filt_prev1;
+  // ay_filt_prev1 = ay;
+}
+
+void Controller::xsens_angular_velocity_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) {
+
+  // double yaw_rate_raw = msg->vector.z;
+
+  // yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
+
+  // yaw_rate_raw_prev2 = yaw_rate_raw_prev1;
+  // yaw_rate_raw_prev1 = yaw_rate_raw;
+  // yaw_rate_filt_prev2 = yaw_rate_filt_prev1;
+  // yaw_rate_filt_prev1 = yaw_rate;
+}
+
+void Controller::vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup msg) {
+  double ax_raw = msg.accel.x * -1;
+  double ay_raw = msg.accel.y * -1;
+  double yaw_rate_raw = msg.angularrate.z;
+
+  yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
+
+  yaw_rate_raw_prev2 = yaw_rate_raw_prev1;
+  yaw_rate_raw_prev1 = yaw_rate_raw;
+  yaw_rate_filt_prev2 = yaw_rate_filt_prev1;
+  yaw_rate_filt_prev1 = yaw_rate;
 
   ax = b0*ax_raw + b1*ax_raw_prev1 + b2*ax_raw_prev2 - a1*ax_filt_prev1 - a2*ax_filt_prev2;
 
@@ -236,30 +275,6 @@ void Controller::xsens_acceleration_callback(const geometry_msgs::msg::Vector3St
   ay_filt_prev2 = ay_filt_prev1;
   ay_filt_prev1 = ay;
 }
-
-void Controller::xsens_angular_velocity_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) {
-
-  double yaw_rate_raw = msg->vector.z;
-
-  yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
-
-  yaw_rate_raw_prev2 = yaw_rate_raw_prev1;
-  yaw_rate_raw_prev1 = yaw_rate_raw;
-  yaw_rate_filt_prev2 = yaw_rate_filt_prev1;
-  yaw_rate_filt_prev1 = yaw_rate;
-}
-
-// void Controller::vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup msg) {
-//   // double ax_raw = msg.accel.x * -1;
-//   // double ay_raw = msg.accel.y * -1;
-//   // yaw_rate = msg.angularrate.z;
-
-//   // ax_filtered = lp_alpha_acc * ax_raw  + (1.0 - lp_alpha_acc) * ax_filtered;
-//   // ay_filtered = lp_alpha_acc * ay_raw  + (1.0 - lp_alpha_acc) * ay_filtered;
-
-//   // ax = ax_filtered;
-//   // ay = ay_filtered;
-// }
 
 void Controller::bms_hv_main_callback(const BmsHvMain msg) { batt_curr = msg.current; }
 
