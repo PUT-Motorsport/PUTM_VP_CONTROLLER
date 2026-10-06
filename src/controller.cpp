@@ -14,7 +14,7 @@
 // POCZĄTEK INICJALIZACJI STAŁYCH POD REGULATOR PI/PID!!!!!!!!!!!
 
  // Limity pod regulator na furę na kobyłkach (uniesionej w górzę)
-constexpr double TAU_MIN = 0.0;
+constexpr double TAU_MIN = -20.0;
 constexpr double TAU_MAX = 200.0;
 
 //Limity pod regulator na furę jeżdżącą
@@ -54,13 +54,9 @@ constexpr double VELOCITY_SET_MONO_MODE = 5.0;
 // Zmienne globalne VECTORING MODE (CASE 3)
 constexpr double VECTORING_DIVIDER = 120.0;
 
-// Zmienne globalne - CZOŁG MODE (CASE 4)
-constexpr double CZOLG_DIVIDER = 45.0;
 
-
-
-// Zmienne globalne - CZOŁG MODE (CASE 4)
-constexpr double Kierownica_czolg_ratio = 1.0;
+constexpr bool ODPOWIEDZ_SKOKOWA = false;
+constexpr double TAU_SKOKOWA[4] = {80.0, 80.0, 50.0, 50.0};
 
 
 
@@ -495,6 +491,14 @@ void Controller::control_loop() {
           tau_final[3] = std::clamp(Kpro_rr * velocity_rear_right_error + Kint_rr * integral_rear_right, LOW_CLAMP, HIGH_CLAMP);
           }
 
+
+          
+        if(pedal > 0.05 && ODPOWIEDZ_SKOKOWA){
+          tau_final[0] = std::min(TAU_SKOKOWA[0],tau_prev[0]+MAX_DTAU);
+          tau_final[1] = std::min(TAU_SKOKOWA[1],tau_prev[1]+MAX_DTAU);
+          tau_final[2] = std::min(TAU_SKOKOWA[2],tau_prev[2]+MAX_DTAU);
+          tau_final[3] = std::min(TAU_SKOKOWA[3],tau_prev[3]+MAX_DTAU);
+        }
 
 
   tau_prev[0] = tau_final[0];
