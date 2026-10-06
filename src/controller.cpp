@@ -14,7 +14,7 @@
 
 constexpr double MAX_MOMENT = 100;
 constexpr double CAP_MOMENT = 100;
-constexpr double Ku = 1.0/150.0;
+constexpr double Ku = 1.0/270.0;
 constexpr bool enable_tc = true;
 
 extern "C" {
@@ -423,9 +423,9 @@ void Controller::control_loop() {
                   double speed_excess = current_v_wheel - max_safe_v_wheel;
                   dynamic_max_torque = std::max(0.0, MAX_MOMENT - speed_excess * 80.0);
               }
-              tau_final[i] = std::clamp(blended, 0.0, dynamic_max_torque);
+              tau_final[i] = std::clamp(blended, -10.0, dynamic_max_torque);
           } else {
-              tau_final[i] = std::clamp(blended, 0.0, MAX_MOMENT);
+              tau_final[i] = std::clamp(blended, -10.0, MAX_MOMENT);
           }
       }
     }
@@ -450,7 +450,7 @@ void Controller::control_loop() {
   yaw_ref.fz_rr = fz_rr;
   yaw_rate_ref_publisher->publish(yaw_ref);
 
-  setpoints.front_left.torque = convert_torque(-tau_final[0]);
+  setpoints.front_left.torque = convert_torque(tau_final[0]);
   setpoints.front_right.torque = convert_torque(tau_final[1]);
   setpoints.rear_left.torque = convert_torque(tau_final[2]);
   setpoints.rear_right.torque = convert_torque(tau_final[3]);
