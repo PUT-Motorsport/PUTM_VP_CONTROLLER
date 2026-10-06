@@ -256,7 +256,7 @@ void Controller::control_loop() {
     tv_code_U.yaw_rate = yaw_rate;
     tv_code_U.kp = 300;
     tv_code_U.ki = 30;
-    tv_code_U.Inport7 = pedal * 11 * 9.8;
+    tv_code_U.Inport7 = pedal * 11 * 9.8 * 4;
 
     // tv_code_P.batt_curr_Value = abs(batt_curr/100);
     // tv_code_P.yaw_rate_Value = yaw_rate;
@@ -301,7 +301,7 @@ void Controller::control_loop() {
     // vpdata.irr = tv_code_B.IRR;
     // vpdata.urr = tv_code_B.URR;
 
-    setpoints.front_left.torque = convert_torque(torque_fl);
+    setpoints.front_left.torque = convert_torque(-torque_fl);
     setpoints.front_right.torque = convert_torque(torque_fr);
     setpoints.rear_left.torque = convert_torque(torque_rl);
     setpoints.rear_right.torque = convert_torque(torque_rr);
