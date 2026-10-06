@@ -9,14 +9,61 @@
 #include <Eigen/Dense>
 #include <cmath>
 #include <algorithm>
+
+
+// POCZĄTEK INICJALIZACJI STAŁYCH POD REGULATOR PI/PID!!!!!!!!!!!
+
+ // Limity pod regulator na furę na kobyłkach (uniesionej w górzę)
 constexpr double TAU_MIN = 0.0;
-constexpr double TAU_MAX = 180.0; // dostosuj do realnego limitu tau_final
+constexpr double TAU_MAX = 180.0;
+
+//Limity pod regulator na furę jeżdżącą
+constexpr double TAU_MIN_real = 0.0;
+constexpr double TAU_MAX_real = 500.0;
+
+//parametry kierownicy
+constexpr double Kierwonica_ratio = 0.3;
 
 
-
+// Parametry fizyczne bolidu:
 constexpr double WHEEL_RADIUS = 0.198;
 constexpr double GEAR_RATIO = 11.0;
 constexpr double RPM_TO_MPS = 2.0 * M_PI * WHEEL_RADIUS / (60.0 * GEAR_RATIO);
+
+// Ograniczenia
+constexpr double MAX_DTAU = 40.0; // Ograniczenie w zmianie Torque
+
+
+// START ZMIENNE GLOBALNE
+// Zmienne globalne - GLOBAL (zmienne dotyczące wszystkich modów jazdy)
+  double tau_prev[4] = {0.0, 0.0, 0.0, 0.0};
+  double tau_final[4] = {0.0, 0.0, 0.0, 0.0};
+
+  double velocity_set_front_left = 0.0;
+  double velocity_set_front_right = 0.0;
+  double velocity_set_rear_left = 0.0;
+  double velocity_set_rear_right = 0.0;
+
+
+
+
+
+// Zmienne globalne - MONO MODE (CASE 2)
+constexpr double VELOCITY_SET_MONO_MODE = 5.0;
+
+
+
+// Zmienne globalne - CZOŁG MODE (CASE 4)
+constexpr double Kierownica_czolg_ratio = 1.0;
+
+
+
+ // KONIEC ZMIENNYCH GLOBALNYCH
+
+// KONIEC INICJALIZACJI STAŁYCH POD REGULATOR PI/PID!!!!!!!!!!!
+
+constexpr double refresh_rate = 0.01; // refresh rate of controller.cpp in [ms]
+
 
 // #include "putm_vcl_interfaces/msg/xsens_acceleration.hpp"
 // #include "putm_vcl_interfaces/msg/xsens_rate_of_turn.hpp"
@@ -46,6 +93,10 @@ class Controller : public rclcpp::Node {
   FrontboxDriverInput frontbox_driver_input;
   SteeringWheel steering_wheel;
 
+   // SWITCH KEY dla regulatora PI
+  uint16_t switch_key_motion_modes_ = 1;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_;
+  // KONIEC INICJALIZACJI
 
   rclcpp::Publisher<Setpoints>::SharedPtr setpoints_publisher;
   rclcpp::Publisher<YawRef>::SharedPtr yaw_rate_ref_publisher;
@@ -114,16 +165,13 @@ class Controller : public rclcpp::Node {
   const double dt = 0.01;
 
   // TC
-  double tau_final[4];
+  // double tau_final[4];
   double prev_tau_nmpc[4];
 
   // Parametry TC
   const double R_e = 0.193;
 
   const double kappa_limit = 1.05;
-
-
-    double tau_prev[4] = {0.0, 0.0, 0.0, 0.0};  
 
 
   // EKF
@@ -175,20 +223,19 @@ Controller::Controller()
       speed_fl(0), speed_fr(0), speed_rl(0), speed_rr(0),
       ay(0.0), ax(0.0), yaw_rate(0.0), batt_curr(0.0)
       {
-
       acados_capsule = tv_nmpc_acados_create_capsule();
       int status = tv_nmpc_acados_create(acados_capsule);
       if (status) {
         RCLCPP_FATAL(this->get_logger(), "Acados solver init failed with status: %d", status);
       }
-
+      
       nlp_config = tv_nmpc_acados_get_nlp_config(acados_capsule);
       nlp_dims   = tv_nmpc_acados_get_nlp_dims(acados_capsule);
       nlp_in     = tv_nmpc_acados_get_nlp_in(acados_capsule);
       nlp_out    = tv_nmpc_acados_get_nlp_out(acados_capsule);
 
       for (int i = 0; i < 4; i++) {
-        tau_final[i] = 0.0;
+        // tau_final[i] = 0.0;
         prev_tau_nmpc[i] = 0.0;
       }
 
@@ -196,6 +243,29 @@ Controller::Controller()
       ekf_P = Eigen::Matrix2d::Identity() * 0.1;
       ekf_I = Eigen::Matrix2d::Identity();
 
+
+
+      // SWITCHING KEY INICJALIZACJA
+      switch_key_motion_modes_ = declare_parameter<int>("switch_key_motion_modes", 1);
+
+      param_cb_ = add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter>& params) {
+          rcl_interfaces::msg::SetParametersResult res;
+          res.successful = true;
+          for (const auto& p : params) {
+            if (p.get_name() == "switch_key_motion_modes") {
+              int v = p.as_int();
+              if (v < 0 || v > 3) {            // dopasuj do liczby trybów
+                res.successful = false;
+                res.reason = "invalid mode";
+              } else {
+                switch_key_motion_modes_ = static_cast<uint16_t>(v);
+              }
+            }
+          }
+          return res;
+        });
+        // KONIEC INIZJACLIZACJI
       }
 
 Controller::~Controller() {
@@ -277,9 +347,10 @@ void Controller::control_loop() {
   convert_steering_angle(steering_angle_deg, delta_l_rad, delta_r_rad);
   
 
+  // START Inicjalizacji zmiennych dla PID !!!!!!!!!
 
   double gain_const = 1.0;
-  // pi settings
+
   double Kpro_fr = 87.14 * gain_const;
   double Kpro_fl = 102.53 * gain_const;
   double Kpro_rr = 70.0 * gain_const;
@@ -289,11 +360,23 @@ void Controller::control_loop() {
   double Kint_fl = 139.43 * gain_const;
   double Kint_rr = 215.35 * gain_const;
   double Kint_rl = 240.01 * gain_const;
+  
+  uint16_t SWITCH_KEY_MOTION_MODES = switch_key_motion_modes_;  // ros2 param set /controller switch_key_motion_modes 2
+  // OBECNA WARTOSC -> ros2 param get /controller switch_key_motion_modes 
+  /*
+  ZERO MODE = 0 (0 TORQUE, CAR DOESN'T MOVE)
+  PEDAL MODE = 1 (THE SAME SPEED FOR EVERY WHEEL)
+  MONO MODE = 2 (CONSTANT SPEED)
+  SPEED VECTORING MODE = 3 (DURING TURNS BASED ON STEERING WHEEL PROPORTIONALLY SLOWS DOWN INNER WHEELS AND SPEEDS UP OUTER WHEELS)
+  CZOLG MODE = 4 (TURNS LIKE A FUCKING TANK ITS CRAZY)
+  */
+
+  // Ograniczenia
+  double LOW_CLAMP, HIGH_CLAMP, tau_signal_attempt;
+  bool sat;
 
 
-
-
-  double refresh_rate = 0.01; // refresh rate of controller.cpp in [ms]
+  // KONIEC inicjalizacji zmiennych dla PID!!!!!!!!!!
 
   double vx_est = 1.0;
   double vy_est = 0.0;
@@ -304,15 +387,11 @@ void Controller::control_loop() {
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
 
 
-  constexpr double MAX_DTAU = 40.0;   // 80/s przy pętli 10 ms
-  auto velocity_set = 5.0; // velocity in [m/s]
 
-
-
-    tau_final[0] = 0.0;
-    tau_final[1] = 0.0;
-    tau_final[2] = 0.0;
-    tau_final[3] = 0.0;
+    tau_final[0] = std::max(0.0,tau_prev[0]-MAX_DTAU);
+    tau_final[1] = std::max(0.0,tau_prev[1]-MAX_DTAU);
+    tau_final[2] = std::max(0.0,tau_prev[2]-MAX_DTAU);
+    tau_final[3] = std::max(0.0,tau_prev[3]-MAX_DTAU);
 
 
 
@@ -323,63 +402,102 @@ void Controller::control_loop() {
     integral_rear_right  = 0.0;
     }
 
-  if(pedal > 0.05){ // regulator PI
+    switch(SWITCH_KEY_MOTION_MODES){ // different modes for running the car on PID regulators :D
+      break;
+      case 1: 
+          pedal_set_velocity = (pedal - 0.05)*30;
+          velocity_set_front_left = pedal_set_velocity;
+          velocity_set_front_right = pedal_set_velocity;
+          velocity_set_rear_left = pedal_set_velocity;
+          velocity_set_rear_right = pedal_set_velocity;
 
-    // ---------- FL ----------
-    double hi_fl = std::min(TAU_MAX, tau_prev[0] + MAX_DTAU);
-    auto velocity_front_left_error = velocity_set - (speed_fl * RPM_TO_MPS);
-    tau_final[0] = Kpro_fl * velocity_front_left_error + Kint_fl * integral_front_left;
-    bool sat_fl = (tau_final[0] >= hi_fl && velocity_front_left_error > 0) ||
-                  (tau_final[0] <= TAU_MIN && velocity_front_left_error < 0);
-    if (!sat_fl) {
-        integral_front_left += velocity_front_left_error * refresh_rate;
-        tau_final[0] = Kpro_fl * velocity_front_left_error + Kint_fl * integral_front_left;
-    }
-    tau_final[0] = std::clamp(tau_final[0], TAU_MIN, hi_fl);
+      break;
+      case 2: 
+          velocity_set_front_left = VELOCITY_SET_MONO_MODE;
+          velocity_set_front_right = VELOCITY_SET_MONO_MODE;
+          velocity_set_rear_left = VELOCITY_SET_MONO_MODE;
+          velocity_set_rear_right = VELOCITY_SET_MONO_MODE;
 
-    // ---------- FR ----------
-    double hi_fr = std::min(TAU_MAX, tau_prev[1] + MAX_DTAU);
-    auto velocity_front_right_error = velocity_set - (speed_fr * RPM_TO_MPS);
-    tau_final[1] = Kpro_fr * velocity_front_right_error + Kint_fr * integral_front_right;
-    bool sat_fr = (tau_final[1] >= hi_fr && velocity_front_right_error > 0) ||
-                  (tau_final[1] <= TAU_MIN && velocity_front_right_error < 0);
-    if (!sat_fr) {
-        integral_front_right += velocity_front_right_error * refresh_rate;
-        tau_final[1] = Kpro_fr * velocity_front_right_error + Kint_fr * integral_front_right;
-    }
-    tau_final[1] = std::clamp(tau_final[1], TAU_MIN, hi_fr);
+      break;
+      case 3: 
+        pedal_velocity = (pedal - 0.05)*30;
+        velocity_set_front_left = pedal_velocity;
+        velocity_set_front_right = pedal_velocity;
+        velocity_set_rear_left = pedal_velocity;
+        velocity_set_rear_right = pedal_velocity;
 
-    // ---------- RL ----------
-    double hi_rl = std::min(TAU_MAX, tau_prev[2] + MAX_DTAU);
-    auto velocity_rear_left_error = velocity_set - (speed_rl * RPM_TO_MPS);
-    tau_final[2] = Kpro_rl * velocity_rear_left_error + Kint_rl * integral_rear_left;
-    bool sat_rl = (tau_final[2] >= hi_rl && velocity_rear_left_error > 0) ||
-                  (tau_final[2] <= TAU_MIN && velocity_rear_left_error < 0);
-    if (!sat_rl) {
-        integral_rear_left += velocity_rear_left_error * refresh_rate;
-        tau_final[2] = Kpro_rl * velocity_rear_left_error + Kint_rl * integral_rear_left;
-    }
-    tau_final[2] = std::clamp(tau_final[2], TAU_MIN, hi_rl);
+      break;
+      default:
+          velocity_set_front_left = 0.0;
+          velocity_set_front_right = 0.0;
+          velocity_set_rear_left = 0.0;
+          velocity_set_rear_right = 0.0;
+      break;}
+    
+        if(pedal > 0.05){
 
-    // ---------- RR ----------
-    double hi_rr = std::min(TAU_MAX, tau_prev[3] + MAX_DTAU);
-    auto velocity_rear_right_error = velocity_set - (speed_rr * RPM_TO_MPS);
-    tau_final[3] = Kpro_rr * velocity_rear_right_error + Kint_rr * integral_rear_right;
-    bool sat_rr = (tau_final[3] >= hi_rr && velocity_rear_right_error > 0) ||
-                  (tau_final[3] <= TAU_MIN && velocity_rear_right_error < 0);
-    if (!sat_rr) {
-        integral_rear_right += velocity_rear_right_error * refresh_rate;
-        tau_final[3] = Kpro_rr * velocity_rear_right_error + Kint_rr * integral_rear_right;
-    }
-    tau_final[3] = std::clamp(tau_final[3], TAU_MIN, hi_rr);
-  }
+          // ---------- FL ----------
+          auto velocity_front_right_error = velocity_set_front_left - (speed_fl * RPM_TO_MPS);
 
-  for (int i = 0; i < 4; i++) tau_prev[i] = tau_final[i];
+          LOW_CLAMP = std::max(TAU_MIN, tau_prev[0] - MAX_DTAU);
+          HIGH_CLAMP = std::min(TAU_MAX, tau_prev[0] + MAX_DTAU);  
+
+
+          tau_signal_attempt = Kpro_fl * velocity_front_left_error + Kint_fl * (integral_front_left + velocity_front_left_error * refresh_rate);
+          sat = (tau_signal_attempt > HIGH_CLAMP && velocity_front_left_error > 0) || (tau_signal_attempt < LOW_CLAMP && velocity_front_left_error < 0);
+          if (!sat) integral_front_left += velocity_front_left_error * refresh_rate;
+
+
+          tau_final[0] = std::clamp(Kpro_fl * velocity_front_left_error + Kint_fl * integral_front_left, LOW_CLAMP, HIGH_CLAMP);
+          // ---------- FR ----------
+          auto velocity_front_right_error = velocity_set_front_right - (speed_fr * RPM_TO_MPS);
+
+          LOW_CLAMP  = std::max(TAU_MIN, tau_prev[1] - MAX_DTAU);
+          HIGH_CLAMP = std::min(TAU_MAX, tau_prev[1] + MAX_DTAU);
+
+          tau_signal_attempt = Kpro_fr * velocity_front_right_error + Kint_fr * (integral_front_right + velocity_front_right_error * refresh_rate);
+          sat = (tau_signal_attempt > HIGH_CLAMP && velocity_front_right_error > 0) || (tau_signal_attempt < LOW_CLAMP && velocity_front_right_error < 0);
+          if (!sat) integral_front_right += velocity_front_right_error * refresh_rate;
+
+          tau_final[1] = std::clamp(Kpro_fr * velocity_front_right_error + Kint_fr * integral_front_right, LOW_CLAMP, HIGH_CLAMP);
+
+          // ---------- RL ----------
+          auto velocity_rear_left_error = velocity_set_rear_left - (speed_rl * RPM_TO_MPS);
+
+          LOW_CLAMP  = std::max(TAU_MIN, tau_prev[2] - MAX_DTAU);
+          HIGH_CLAMP = std::min(TAU_MAX, tau_prev[2] + MAX_DTAU);
+
+          tau_signal_attempt = Kpro_rl * velocity_rear_left_error + Kint_rl * (integral_rear_left + velocity_rear_left_error * refresh_rate);
+          sat = (tau_signal_attempt > HIGH_CLAMP && velocity_rear_left_error > 0) || (tau_signal_attempt < LOW_CLAMP && velocity_rear_left_error < 0);
+          if (!sat) integral_rear_left += velocity_rear_left_error * refresh_rate;
+
+          tau_final[2] = std::clamp(Kpro_rl * velocity_rear_left_error + Kint_rl * integral_rear_left, LOW_CLAMP, HIGH_CLAMP);
+
+          // ---------- RR ----------
+          auto velocity_rear_right_error = velocity_set_rear_right - (speed_rr * RPM_TO_MPS);
+
+          LOW_CLAMP  = std::max(TAU_MIN, tau_prev[3] - MAX_DTAU);
+          HIGH_CLAMP = std::min(TAU_MAX, tau_prev[3] + MAX_DTAU);
+
+          tau_signal_attempt = Kpro_rr * velocity_rear_right_error + Kint_rr * (integral_rear_right + velocity_rear_right_error * refresh_rate);
+          sat = (tau_signal_attempt > HIGH_CLAMP && velocity_rear_right_error > 0) || (tau_signal_attempt < LOW_CLAMP && velocity_rear_right_error < 0);
+          if (!sat) integral_rear_right += velocity_rear_right_error * refresh_rate;
+
+          tau_final[3] = std::clamp(Kpro_rr * velocity_rear_right_error + Kint_rr * integral_rear_right, LOW_CLAMP, HIGH_CLAMP);
+          }
+
+
+
+  tau_prev[0] = tau_final[0];
+  tau_prev[1] = tau_final[1];
+  tau_prev[2] = tau_final[2];
+  tau_prev[3] = tau_final[3];
 
   setpoints.front_left.torque = -tau_final[0];
   setpoints.front_right.torque = tau_final[1];
   setpoints.rear_left.torque = tau_final[2];
   setpoints.rear_right.torque = tau_final[3];
+
   setpoints_publisher->publish(setpoints);
 }
 
