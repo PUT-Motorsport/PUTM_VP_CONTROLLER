@@ -24,6 +24,30 @@ constexpr double TAU_MAX = 200.0;
 //parametry kierownicy
 // constexpr double Kierwonica_ratio = 0.3;
 
+constexpr int SWITCH_KEY_MOTION_MODE_DEFAULT = 3;
+
+constexpr double GAIN_CONST_DEFAULT = 1.0;
+
+// constexpr double KPRO_FR_DEFAULT = 87.14;
+// constexpr double KPRO_FL_DEFAULT = 102.53;
+// constexpr double KPRO_RR_DEFAULT = 70.0;
+// constexpr double KPRO_RL_DEFAULT = 80.26;
+
+// constexpr double KINT_FR_DEFAULT = 270.79;
+// constexpr double KINT_FL_DEFAULT = 139.43;
+// constexpr double KINT_RR_DEFAULT = 215.35;
+// constexpr double KINT_RL_DEFAULT = 240.01;
+
+
+constexpr double KPRO_FR_DEFAULT = 73.71;
+constexpr double KPRO_FL_DEFAULT = 79.27;
+constexpr double KPRO_RR_DEFAULT = 76.24;
+constexpr double KPRO_RL_DEFAULT = 147.87;
+
+constexpr double KINT_FR_DEFAULT = 88.85;
+constexpr double KINT_FL_DEFAULT = 87.41;
+constexpr double KINT_RR_DEFAULT = 99.26;
+constexpr double KINT_RL_DEFAULT = 293.40;
 
 // Parametry fizyczne bolidu:
 constexpr double WHEEL_RADIUS = 0.198;
@@ -76,10 +100,10 @@ constexpr double CAP_MOMENT = 143;
 constexpr double Ku = 1.0/50.0;
 constexpr bool enable_tc = true;
 
-extern "C" {
-#include "acados_solver_tv_nmpc.h"
-#include "acados_c/ocp_nlp_interface.h"
-}
+// extern "C" {
+// #include "acados_solver_tv_nmpc.h"
+// #include "acados_c/ocp_nlp_interface.h"
+// }
 
 using namespace std::chrono_literals;
 using namespace putm_vcl_interfaces::msg;
@@ -153,16 +177,16 @@ class Controller : public rclcpp::Node {
   const double a2 = 0.73926403;
 
   // Wskaźniki i bufory ACADOS
-  tv_nmpc_solver_capsule *acados_capsule;
-  ocp_nlp_config *nlp_config;
-  ocp_nlp_dims *nlp_dims;
-  ocp_nlp_in *nlp_in;
-  ocp_nlp_out *nlp_out;
+  // tv_nmpc_solver_capsule *acados_capsule;
+  // ocp_nlp_config *nlp_config;
+  // ocp_nlp_dims *nlp_dims;
+  // ocp_nlp_in *nlp_in;
+  // ocp_nlp_out *nlp_out;
 
-  double lbx0[TV_NMPC_NBX0];
-  double ubx0[TV_NMPC_NBX0];
-  double p_val[TV_NMPC_NP];
-  double x_k1[TV_NMPC_NX];
+  // double lbx0[TV_NMPC_NBX0];
+  // double ubx0[TV_NMPC_NBX0];
+  // double p_val[TV_NMPC_NP];
+  // double x_k1[TV_NMPC_NX];
 
   const double dt = 0.01;
 
@@ -225,16 +249,16 @@ Controller::Controller()
       speed_fl(0), speed_fr(0), speed_rl(0), speed_rr(0),
       ay(0.0), ax(0.0), yaw_rate(0.0), batt_curr(0.0)
       {
-      acados_capsule = tv_nmpc_acados_create_capsule();
-      int status = tv_nmpc_acados_create(acados_capsule);
-      if (status) {
-        RCLCPP_FATAL(this->get_logger(), "Acados solver init failed with status: %d", status);
-      }
+      // acados_capsule = tv_nmpc_acados_create_capsule();
+      // int status = tv_nmpc_acados_create(acados_capsule);
+      // if (status) {
+      //   RCLCPP_FATAL(this->get_logger(), "Acados solver init failed with status: %d", status);
+      // }
       
-      nlp_config = tv_nmpc_acados_get_nlp_config(acados_capsule);
-      nlp_dims   = tv_nmpc_acados_get_nlp_dims(acados_capsule);
-      nlp_in     = tv_nmpc_acados_get_nlp_in(acados_capsule);
-      nlp_out    = tv_nmpc_acados_get_nlp_out(acados_capsule);
+      // nlp_config = tv_nmpc_acados_get_nlp_config(acados_capsule);
+      // nlp_dims   = tv_nmpc_acados_get_nlp_dims(acados_capsule);
+      // nlp_in     = tv_nmpc_acados_get_nlp_in(acados_capsule);
+      // nlp_out    = tv_nmpc_acados_get_nlp_out(acados_capsule);
 
       for (int i = 0; i < 4; i++) {
         // tau_final[i] = 0.0;
@@ -248,22 +272,42 @@ Controller::Controller()
 
 
       // SWITCHING KEY INICJALIZACJA
-      switch_key_motion_modes_ = declare_parameter<int>("switch_key_motion_modes", 1);
+      switch_key_motion_modes_ = declare_parameter<int>("switch_key_motion_modes", SWITCH_KEY_MOTION_MODE_DEFAULT);
+      declare_parameter("gain_const", GAIN_CONST_DEFAULT);
 
-      param_cb_ = add_on_set_parameters_callback(
+      declare_parameter("Kpro_fr", KPRO_FR_DEFAULT);  declare_parameter("Kpro_fl", KPRO_FL_DEFAULT);
+      declare_parameter("Kpro_rr", KPRO_RR_DEFAULT);  declare_parameter("Kpro_rl", KPRO_RL_DEFAULT);
+
+      declare_parameter("Kint_fr", KINT_FR_DEFAULT);  declare_parameter("Kint_fl", KINT_FL_DEFAULT);
+      declare_parameter("Kint_rr", KINT_RR_DEFAULT);  declare_parameter("Kint_rl", KINT_RL_DEFAULT);
+            param_cb_ = add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter>& params) {
           rcl_interfaces::msg::SetParametersResult res;
           res.successful = true;
+
           for (const auto& p : params) {
-            if (p.get_name() == "switch_key_motion_modes") {
+            const std::string name = p.get_name();
+
+            if (name == "switch_key_motion_modes") {
               int v = p.as_int();
-              if (v < 0 || v > 3) {            // dopasuj do liczby trybów
+              if (v < 0 || v > 3) {
                 res.successful = false;
-                res.reason = "invalid mode";
-              } else {
-                switch_key_motion_modes_ = static_cast<uint16_t>(v);
+                res.reason = "switch_key_motion_modes musi byc w zakresie 0-3";
+                RCLCPP_WARN(get_logger(), "Odrzucono %s = %d (zakres 0-3)", name.c_str(), v);
+                return res;
+              }
+            } else if (name == "gain_const" || name.rfind("Kpro_", 0) == 0 || name.rfind("Kint_", 0) == 0) {
+              double v = p.as_double();
+              if (!std::isfinite(v) || v < 0.0) {
+                res.successful = false;
+                res.reason = name + " musi byc liczba >= 0";
+                RCLCPP_WARN(get_logger(), "Odrzucono %s = %f (musi byc >= 0)", name.c_str(), v);
+                return res;
               }
             }
+
+            RCLCPP_INFO(get_logger(), "Zmieniono %s na %s",
+                        name.c_str(), p.value_to_string().c_str());
           }
           return res;
         });
@@ -271,8 +315,8 @@ Controller::Controller()
       }
 
 Controller::~Controller() {
-  tv_nmpc_acados_free(acados_capsule);
-  tv_nmpc_acados_free_capsule(acados_capsule);
+  // tv_nmpc_acados_free(acados_capsule);
+  // tv_nmpc_acados_free_capsule(acados_capsule);
 }
 
 void Controller::frontbox_driver_input_topic_callback(const FrontboxDriverInput msg) { frontbox_driver_input = msg; }
@@ -351,22 +395,22 @@ void Controller::control_loop() {
 
   // START Inicjalizacji zmiennych dla PID !!!!!!!!!
 
-  double gain_const = 1.0;
+  uint16_t SWITCH_KEY_MOTION_MODES = get_parameter("switch_key_motion_modes").as_int();
 
-  double Kpro_fr = 87.14 * gain_const;
-  double Kpro_fl = 102.53 * gain_const;
-  double Kpro_rr = 70.0 * gain_const;
-  double Kpro_rl = 80.26 * gain_const;
-
-  double Kint_fr = 270.79 * gain_const;
-  double Kint_fl = 139.43 * gain_const;
-  double Kint_rr = 215.35 * gain_const;
-  double Kint_rl = 240.01 * gain_const;
+  double gain_const = get_parameter("gain_const").as_double();
+  double Kpro_fr = get_parameter("Kpro_fr").as_double() * gain_const;
+  double Kpro_fl = get_parameter("Kpro_fl").as_double() * gain_const;
+  double Kpro_rr = get_parameter("Kpro_rr").as_double() * gain_const;
+  double Kpro_rl = get_parameter("Kpro_rl").as_double() * gain_const;
+  double Kint_fr = get_parameter("Kint_fr").as_double() * gain_const;
+  double Kint_fl = get_parameter("Kint_fl").as_double() * gain_const;
+  double Kint_rr = get_parameter("Kint_rr").as_double() * gain_const;
+  double Kint_rl = get_parameter("Kint_rl").as_double() * gain_const;
   
   double pedal_set_velocity = 0.0;
 
   // uint16_t SWITCH_KEY_MOTION_MODES = switch_key_motion_modes_;  // ros2 param set /controller switch_key_motion_modes 2
-    const uint16_t SWITCH_KEY_MOTION_MODES = 3;
+    // const uint16_t SWITCH_KEY_MOTION_MODES = 3;
   // OBECNA WARTOSC -> ros2 param get /controller switch_key_motion_modes 
   /*
   ZERO MODE = 0 (0 TORQUE, CAR DOESN'T MOVE)
@@ -416,6 +460,10 @@ void Controller::control_loop() {
           velocity_set_rear_left = pedal_set_velocity;
           velocity_set_rear_right = pedal_set_velocity;
 
+          // velocity_set_front_left = std::min(pedal_set_velocity,15);
+          // velocity_set_front_right = std::min(pedal_set_velocity,15);
+          // velocity_set_rear_left = std::min(pedal_set_velocity,15);
+          // velocity_set_rear_right = std::min(pedal_set_velocity,15);
       break;
       case 2: 
           velocity_set_front_left = VELOCITY_SET_MONO_MODE;
@@ -426,10 +474,17 @@ void Controller::control_loop() {
       break;
       case 3: 
         pedal_set_velocity = (pedal - 0.05)*30;
-        velocity_set_front_left = std::min(pedal_set_velocity,pedal_set_velocity+(steering_angle_deg/VECTORING_DIVIDER));
-        velocity_set_front_right = std::min(pedal_set_velocity,pedal_set_velocity-(steering_angle_deg/VECTORING_DIVIDER));
-        velocity_set_rear_left = std::min(pedal_set_velocity,pedal_set_velocity+(steering_angle_deg/VECTORING_DIVIDER));
-        velocity_set_rear_right = std::min(pedal_set_velocity,pedal_set_velocity-(steering_angle_deg/VECTORING_DIVIDER));
+        double DELTA_RAD = (0.00005 * steering_angle_deg * steering_angle_deg + 0.285758 * steering_angle_deg + 1.576273) * (M_PI / 180.0);
+        double RADIOUS_MIDDLE = CAR_LENGTH/tan(DELTA_RAD);
+        double RADIOUS_INNER = abs(RADIOUS_MIDDLE - CAR_WIDTH/2);
+        double RADIOUS_OUTER = abs(RADIOUS_MIDDLE + CAR_WIDTH/2);
+
+        velocity_set_front_left = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_OUTER/RADIOUS_MIDDLE)));
+        velocity_set_rear_left = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_OUTER/RADIOUS_MIDDLE)));
+
+
+        velocity_set_front_right = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_INNER/RADIOUS_MIDDLE)));
+        velocity_set_rear_right = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_INNER/RADIOUS_MIDDLE)));
 
       break;
       default:
