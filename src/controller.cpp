@@ -17,6 +17,9 @@
 constexpr double TAU_MIN = -20.0;
 constexpr double TAU_MAX = 200.0;
 
+constexpr double CAR_WIDTH = 1.20;
+constexpr double CAR_LENGTH = 1.55;
+
 //Limity pod regulator na furę jeżdżącą
 // constexpr double TAU_MIN_real = 0.0;
 // constexpr double TAU_MAX_real = 500.0;
@@ -435,6 +438,10 @@ void Controller::control_loop() {
   double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
 
+        double DELTA_RAD ;
+        double RADIOUS_MIDDLE ;
+        double RADIOUS_INNER ;
+        double RADIOUS_OUTER ;
 
 
     tau_final[0] = std::max(0.0,tau_prev[0]-MAX_DTAU);
@@ -452,13 +459,12 @@ void Controller::control_loop() {
     }
 
     switch(SWITCH_KEY_MOTION_MODES){ // different modes for running the car on PID regulators :D
-      break;
       case 1: 
           pedal_set_velocity = (pedal - 0.05)*30;
-          velocity_set_front_left = pedal_set_velocity;
-          velocity_set_front_right = pedal_set_velocity;
-          velocity_set_rear_left = pedal_set_velocity;
-          velocity_set_rear_right = pedal_set_velocity;
+           velocity_set_front_left = pedal_set_velocity;
+           velocity_set_front_right = pedal_set_velocity;
+           velocity_set_rear_left = pedal_set_velocity;
+           velocity_set_rear_right = pedal_set_velocity;
 
           // velocity_set_front_left = std::min(pedal_set_velocity,15);
           // velocity_set_front_right = std::min(pedal_set_velocity,15);
@@ -472,12 +478,18 @@ void Controller::control_loop() {
           velocity_set_rear_right = VELOCITY_SET_MONO_MODE;
 
       break;
-      case 3: 
+      case 3: {
         pedal_set_velocity = (pedal - 0.05)*30;
-        double DELTA_RAD = (0.00005 * steering_angle_deg * steering_angle_deg + 0.285758 * steering_angle_deg + 1.576273) * (M_PI / 180.0);
-        double RADIOUS_MIDDLE = CAR_LENGTH/tan(DELTA_RAD);
-        double RADIOUS_INNER = abs(RADIOUS_MIDDLE - CAR_WIDTH/2);
-        double RADIOUS_OUTER = abs(RADIOUS_MIDDLE + CAR_WIDTH/2);
+         DELTA_RAD = (0.00005 * steering_angle_deg * steering_angle_deg + 0.285758 * steering_angle_deg + 1.576273) * (M_PI / 180.0);
+        if (DELTA_RAD < -0.05 || DELTA_RAD > 0.05){
+         RADIOUS_MIDDLE = CAR_LENGTH/tan(DELTA_RAD);
+         RADIOUS_INNER = abs(RADIOUS_MIDDLE - CAR_WIDTH/2);
+         RADIOUS_OUTER = abs(RADIOUS_MIDDLE + CAR_WIDTH/2);}
+         else{
+            RADIOUS_MIDDLE = 1.0;
+            RADIOUS_INNER = 1.0;
+            RADIOUS_OUTER = 1.0; 
+         }
 
         velocity_set_front_left = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_OUTER/RADIOUS_MIDDLE)));
         velocity_set_rear_left = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_OUTER/RADIOUS_MIDDLE)));
@@ -486,13 +498,14 @@ void Controller::control_loop() {
         velocity_set_front_right = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_INNER/RADIOUS_MIDDLE)));
         velocity_set_rear_right = std::max(0.0, abs(pedal_set_velocity * (RADIOUS_INNER/RADIOUS_MIDDLE)));
 
-      break;
-      default:
-          velocity_set_front_left = 0.0;
-          velocity_set_front_right = 0.0;
-          velocity_set_rear_left = 0.0;
-          velocity_set_rear_right = 0.0;
       break;}
+      default:
+           velocity_set_front_left = 0.0;
+           velocity_set_front_right = 0.0;
+           velocity_set_rear_left = 0.0;
+           velocity_set_rear_right = 0.0;
+      break;
+    }
     
         if(pedal > 0.05){
 
