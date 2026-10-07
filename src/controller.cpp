@@ -485,7 +485,7 @@ void Controller::control_loop() {
       case 3: {
         pedal_set_velocity = (pedal - 0.05)*30;
          DELTA_RAD = (0.00005 * steering_angle_deg * steering_angle_deg + 0.285758 * steering_angle_deg + 1.576273) * (M_PI / 180.0);
-        if (DELTA_RAD < -0.05 || DELTA_RAD > 0.05){
+        if (DELTA_RAD < -0.5 || DELTA_RAD > 0.05){
          RADIOUS_MIDDLE = CAR_LENGTH/tan(DELTA_RAD);
          RADIOUS_INNER = abs(RADIOUS_MIDDLE - CAR_WIDTH/2);
          RADIOUS_OUTER = abs(RADIOUS_MIDDLE + CAR_WIDTH/2);}
