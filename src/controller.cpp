@@ -250,8 +250,8 @@ void Controller::xsens_angular_velocity_callback(const geometry_msgs::msg::Vecto
 }
 
 void Controller::vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup msg) {
-  double ax_raw = msg.accel.x * -1;
-  double ay_raw = msg.accel.y * -1;
+  double ax_raw = msg.accel.y * -1;
+  double ay_raw = msg.accel.x;
   double yaw_rate_raw = msg.angularrate.z;
 
   yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
