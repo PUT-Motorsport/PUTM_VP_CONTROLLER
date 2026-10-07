@@ -14,7 +14,7 @@
 // POCZĄTEK INICJALIZACJI STAŁYCH POD REGULATOR PI/PID!!!!!!!!!!!
 
  // Limity pod regulator na furę na kobyłkach (uniesionej w górzę)
-constexpr double TAU_MIN = -20.0;
+constexpr double TAU_MIN = 0.0;
 constexpr double TAU_MAX = 200.0;
 
 constexpr double CAR_WIDTH = 1.20;
