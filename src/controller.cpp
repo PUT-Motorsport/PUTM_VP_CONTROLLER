@@ -83,7 +83,8 @@ constexpr double VECTORING_DIVIDER = 120.0;
 
 
 constexpr bool ODPOWIEDZ_SKOKOWA = false;
-constexpr double TAU_SKOKOWA[4] = {80.0, 80.0, 50.0, 50.0};
+constexpr double TAU_SKOKOWA[4] = {150.0, 150.0, 150.0, 150.0};
+constexpr double TAU_SKOKOWA_DEFAULT = 150.0;
 
 
 
@@ -277,6 +278,7 @@ Controller::Controller()
       // SWITCHING KEY INICJALIZACJA
       switch_key_motion_modes_ = declare_parameter<int>("switch_key_motion_modes", SWITCH_KEY_MOTION_MODE_DEFAULT);
       declare_parameter("gain_const", GAIN_CONST_DEFAULT);
+      declare_parameter("tau_skokowa", TAU_SKOKOWA_DEFAULT);
 
       declare_parameter("Kpro_fr", KPRO_FR_DEFAULT);  declare_parameter("Kpro_fl", KPRO_FL_DEFAULT);
       declare_parameter("Kpro_rr", KPRO_RR_DEFAULT);  declare_parameter("Kpro_rl", KPRO_RL_DEFAULT);
@@ -400,6 +402,8 @@ void Controller::control_loop() {
 
   uint16_t SWITCH_KEY_MOTION_MODES = get_parameter("switch_key_motion_modes").as_int();
 
+  double TAU_SKOKOWA_MAX = get_parameter("tau_skokowa").as_double();
+
   double gain_const = get_parameter("gain_const").as_double();
   double Kpro_fr = get_parameter("Kpro_fr").as_double() * gain_const;
   double Kpro_fl = get_parameter("Kpro_fl").as_double() * gain_const;
@@ -507,7 +511,7 @@ void Controller::control_loop() {
       break;
     }
     
-        if(pedal > 0.05){
+        if(pedal > 0.05 && !ODPOWIEDZ_SKOKOWA){
 
           // ---------- FL ----------
           auto velocity_front_left_error = velocity_set_front_left - (speed_fl * RPM_TO_MPS);
@@ -561,11 +565,11 @@ void Controller::control_loop() {
 
 
           
-        if(pedal > 0.05 && ODPOWIEDZ_SKOKOWA){
-          tau_final[0] = std::min(TAU_SKOKOWA[0],tau_prev[0]+MAX_DTAU);
-          tau_final[1] = std::min(TAU_SKOKOWA[1],tau_prev[1]+MAX_DTAU);
-          tau_final[2] = std::min(TAU_SKOKOWA[2],tau_prev[2]+MAX_DTAU);
-          tau_final[3] = std::min(TAU_SKOKOWA[3],tau_prev[3]+MAX_DTAU);
+        if(pedal > 0.3 && ODPOWIEDZ_SKOKOWA){
+          tau_final[0] = std::min(TAU_SKOKOWA_MAX,tau_prev[0]+MAX_DTAU);
+          tau_final[1] = std::min(TAU_SKOKOWA_MAX,tau_prev[1]+MAX_DTAU);
+          tau_final[2] = std::min(TAU_SKOKOWA_MAX,tau_prev[2]+MAX_DTAU);
+          tau_final[3] = std::min(TAU_SKOKOWA_MAX,tau_prev[3]+MAX_DTAU);
         }
 
 
