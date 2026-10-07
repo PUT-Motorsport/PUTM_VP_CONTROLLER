@@ -15,7 +15,7 @@
 
  // Limity pod regulator na furę na kobyłkach (uniesionej w górzę)
 constexpr double TAU_MIN = 0.0;
-constexpr double TAU_MAX = 200.0;
+constexpr double TAU_MAX = 400.0;
 
 constexpr double CAR_WIDTH = 1.20;
 constexpr double CAR_LENGTH = 1.55;
@@ -27,9 +27,9 @@ constexpr double CAR_LENGTH = 1.55;
 //parametry kierownicy
 // constexpr double Kierwonica_ratio = 0.3;
 
-constexpr int SWITCH_KEY_MOTION_MODE_DEFAULT = 3;
+constexpr int SWITCH_KEY_MOTION_MODE_DEFAULT = 1;
 
-constexpr double GAIN_CONST_DEFAULT = 1.0;
+constexpr double GAIN_CONST_DEFAULT = 3.0;
 
 // constexpr double KPRO_FR_DEFAULT = 87.14;
 // constexpr double KPRO_FL_DEFAULT = 102.53;
@@ -465,15 +465,15 @@ void Controller::control_loop() {
     switch(SWITCH_KEY_MOTION_MODES){ // different modes for running the car on PID regulators :D
       case 1: 
           pedal_set_velocity = (pedal - 0.05)*30;
-           velocity_set_front_left = pedal_set_velocity;
-           velocity_set_front_right = pedal_set_velocity;
-           velocity_set_rear_left = pedal_set_velocity;
-           velocity_set_rear_right = pedal_set_velocity;
+          //  velocity_set_front_left = pedal_set_velocity;
+          //  velocity_set_front_right = pedal_set_velocity;
+          //  velocity_set_rear_left = pedal_set_velocity;
+          //  velocity_set_rear_right = pedal_set_velocity;
 
-          // velocity_set_front_left = std::min(pedal_set_velocity,15);
-          // velocity_set_front_right = std::min(pedal_set_velocity,15);
-          // velocity_set_rear_left = std::min(pedal_set_velocity,15);
-          // velocity_set_rear_right = std::min(pedal_set_velocity,15);
+          velocity_set_front_left = std::min(pedal_set_velocity,15);
+          velocity_set_front_right = std::min(pedal_set_velocity,15);
+          velocity_set_rear_left = std::min(pedal_set_velocity,15);
+          velocity_set_rear_right = std::min(pedal_set_velocity,15);
       break;
       case 2: 
           velocity_set_front_left = VELOCITY_SET_MONO_MODE;
