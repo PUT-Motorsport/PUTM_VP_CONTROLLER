@@ -485,10 +485,11 @@ void Controller::control_loop() {
       case 3: {
         pedal_set_velocity = (pedal - 0.05)*30;
          DELTA_RAD = (0.00005 * steering_angle_deg * steering_angle_deg + 0.285758 * steering_angle_deg + 1.576273) * (M_PI / 180.0);
-        if (DELTA_RAD < -0.5 || DELTA_RAD > 0.05){
+        if (DELTA_RAD < -0.05 || DELTA_RAD > 0.05){
          RADIOUS_MIDDLE = CAR_LENGTH/tan(DELTA_RAD);
          RADIOUS_INNER = abs(RADIOUS_MIDDLE - CAR_WIDTH/2);
-         RADIOUS_OUTER = abs(RADIOUS_MIDDLE + CAR_WIDTH/2);}
+         RADIOUS_OUTER = abs(RADIOUS_MIDDLE + CAR_WIDTH/2);
+        }
          else{
             RADIOUS_MIDDLE = 1.0;
             RADIOUS_INNER = 1.0;
@@ -565,12 +566,12 @@ void Controller::control_loop() {
 
 
           
-        if(pedal > 0.3 && ODPOWIEDZ_SKOKOWA){
-          tau_final[0] = std::min(TAU_SKOKOWA_MAX,tau_prev[0]+MAX_DTAU);
-          tau_final[1] = std::min(TAU_SKOKOWA_MAX,tau_prev[1]+MAX_DTAU);
-          tau_final[2] = std::min(TAU_SKOKOWA_MAX,tau_prev[2]+MAX_DTAU);
-          tau_final[3] = std::min(TAU_SKOKOWA_MAX,tau_prev[3]+MAX_DTAU);
-        }
+      if(pedal > 0.3 && ODPOWIEDZ_SKOKOWA){
+        tau_final[0] = std::min(TAU_SKOKOWA_MAX,tau_prev[0]+MAX_DTAU);
+        tau_final[1] = std::min(TAU_SKOKOWA_MAX,tau_prev[1]+MAX_DTAU);
+        tau_final[2] = std::min(TAU_SKOKOWA_MAX,tau_prev[2]+MAX_DTAU);
+        tau_final[3] = std::min(TAU_SKOKOWA_MAX,tau_prev[3]+MAX_DTAU);
+      }
 
 
   tau_prev[0] = tau_final[0];
