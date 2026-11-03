@@ -302,8 +302,9 @@ void Controller::control_loop() {
   double yaw_rate_ref = referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
   double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
-  double manual_torque = pedal * MAX_MOMENT;
+  double manual_torque = -0.1 * MAX_MOMENT;
   ControlMode prev_mode = control_mode;
+  vx_est = 5.0;
 
   switch (control_mode) {
     case ControlMode::MANUAL:
@@ -353,6 +354,8 @@ void Controller::control_loop() {
     is_initialized = false;
   }
   else {
+    if (pedal < 0.01)
+      pedal = -0.1;
 
     double t_ref = manual_torque * 4; 
 
@@ -445,7 +448,7 @@ void Controller::control_loop() {
     }
   }
   
-  if (pedal < 0.01) {
+  if (pedal < 0.01 && vx_est < 2.0) {
     tau_final[0] = 0.0;
     tau_final[1] = 0.0;
     tau_final[2] = 0.0;
