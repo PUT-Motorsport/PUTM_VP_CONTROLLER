@@ -337,6 +337,7 @@ void Controller::control_loop() {
   }
 
   bool solver_active = (control_mode != ControlMode::MANUAL);
+  bool tc_on = false;
 
   // Low speed mode z manualnym sterowaniem momentem
   if (!solver_active) {
@@ -403,7 +404,7 @@ void Controller::control_loop() {
       ocp_nlp_out_set(nlp_config, nlp_dims, nlp_out, nlp_in, TV_NMPC_N, "x", x_init);
       is_initialized = true;
     }
-    
+
     // SOLVE
     int status = tv_nmpc_acados_solve(acados_capsule);
     
@@ -434,6 +435,7 @@ void Controller::control_loop() {
 
           double max_safe_v_wheel = (vx_est * kappa_limit);
           if (enable_tc && pedal > 0.05) {
+              tc_on = true;
               double current_v_wheel = w_actual[i] * R_e;
               double dynamic_max_torque = MAX_MOMENT;
               if (current_v_wheel > max_safe_v_wheel) {
@@ -461,10 +463,12 @@ void Controller::control_loop() {
   yaw_ref.vy_est = vy_est;
   yaw_ref.filtered_ax = ax;
   yaw_ref.filtered_ay = ay;
+  yaw_ref.filtered_yaw_rate = yaw_rate;
   yaw_ref.fz_fl = fz_fl;
   yaw_ref.fz_fr = fz_fr;
   yaw_ref.fz_rl = fz_rl;
   yaw_ref.fz_rr = fz_rr;
+  yaw_ref.tc_on = tc_on;
   yaw_rate_ref_publisher->publish(yaw_ref);
 
   setpoints.front_left.torque = convert_torque(-tau_final[0]);
