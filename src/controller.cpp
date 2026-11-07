@@ -64,6 +64,7 @@ class Controller : public rclcpp::Node {
   inline double referenceYawRate(double vx, double delta_deg);
   
   // Stany
+  uint8_t control_state = 0;
   bool is_initialized;
   double speed_fl, speed_fr, speed_rl, speed_rr;
   double ay, ax, yaw_rate, batt_curr;
@@ -304,10 +305,10 @@ void Controller::control_loop() {
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
   double manual_torque = -0.1 * MAX_MOMENT;
   ControlMode prev_mode = control_mode;
-  vx_est = 5.0;
 
   switch (control_mode) {
     case ControlMode::MANUAL:
+      control_state = 1;
       if (vx_est >= SPEED_WARMUP) control_mode = ControlMode::WARMUP;
       break;
     case ControlMode::WARMUP:
@@ -320,6 +321,7 @@ void Controller::control_loop() {
       if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
       break;
     case ControlMode::NMPC:
+      control_state = 2;
       if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
       break;
     case ControlMode::BLEND_OUT:
@@ -355,8 +357,10 @@ void Controller::control_loop() {
     is_initialized = false;
   }
   else {
-    if (pedal < 0.01)
+    if (pedal < 0.01){
       pedal = -0.1;
+      control_state = 3;
+    }
 
     double t_ref = manual_torque * 4; 
 
