@@ -14,7 +14,7 @@
 
 constexpr double MAX_MOMENT = 100;
 constexpr double CAP_MOMENT = 100;
-constexpr double Ku = 1.0/270.0;
+constexpr double Ku = 1.0/120.0;
 constexpr bool enable_tc = true;
 
 extern "C" {
@@ -285,7 +285,8 @@ void Controller::control_loop() {
   auto start_time = std::chrono::high_resolution_clock::now();
 
   double pedal = convert_pedal_position(frontbox_driver_input.pedal_position);
-  double steering_angle_deg = ((double)steering_wheel.steering_wheel_position /135 * 50);
+  int16_t value = static_cast<int16_t>(steering_wheel.measurement2);
+  double steering_angle_deg = ((double)value /135 * -50);
 
   double w_fl = convert_wheel_speed(speed_fl);
   double w_fr = convert_wheel_speed(speed_fr);
@@ -303,7 +304,7 @@ void Controller::control_loop() {
   double yaw_rate_ref = referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
   double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
-  double manual_torque = -0.1 * MAX_MOMENT;
+  double manual_torque = MAX_MOMENT * pedal;
   ControlMode prev_mode = control_mode;
 
   switch (control_mode) {
@@ -357,8 +358,8 @@ void Controller::control_loop() {
     is_initialized = false;
   }
   else {
-    if (pedal < 0.01){
-      pedal = -0.1;
+    if (pedal < 0.05 && vx_est > 3.0) {
+      manual_torque = -0.3 * MAX_MOMENT;
       control_state = 3;
     }
 
@@ -446,15 +447,15 @@ void Controller::control_loop() {
                   double speed_excess = current_v_wheel - max_safe_v_wheel;
                   dynamic_max_torque = std::max(0.0, MAX_MOMENT - speed_excess * 80.0);
               }
-              tau_final[i] = std::clamp(blended, -10.0, dynamic_max_torque);
+              tau_final[i] = std::clamp(blended, -30.0, dynamic_max_torque);
           } else {
-              tau_final[i] = std::clamp(blended, -10.0, MAX_MOMENT);
+              tau_final[i] = std::clamp(blended, -30.0, MAX_MOMENT);
           }
       }
     }
   }
   
-  if (pedal < 0.01 && vx_est < 2.0) {
+  if (pedal < 0.01 && vx_est < 3.0) {
     tau_final[0] = 0.0;
     tau_final[1] = 0.0;
     tau_final[2] = 0.0;
@@ -467,7 +468,7 @@ void Controller::control_loop() {
   yaw_ref.vy_est = vy_est;
   yaw_ref.filtered_ax = ax;
   yaw_ref.filtered_ay = ay;
-  yaw_ref.filtered_yaw_rate = yaw_rate;
+  yaw_ref.filtered_yaw_rate = steering_angle_deg;
   yaw_ref.fz_fl = fz_fl;
   yaw_ref.fz_fr = fz_fr;
   yaw_ref.fz_rl = fz_rl;
