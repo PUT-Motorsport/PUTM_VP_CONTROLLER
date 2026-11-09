@@ -12,10 +12,10 @@
 // #include "putm_vcl_interfaces/msg/xsens_rate_of_turn.hpp"
 #include "vectornav_msgs/msg/imu_group.hpp"
 
-constexpr double MAX_MOMENT = 100;
+// constexpr double MAX_MOMENT = 100;
+// constexpr double Ku = 1.0/120.0;
+// constexpr bool enable_tc = true;
 constexpr double CAP_MOMENT = 100;
-constexpr double Ku = 1.0/120.0;
-constexpr bool enable_tc = true;
 
 extern "C" {
 #include "acados_solver_tv_nmpc.h"
@@ -62,6 +62,23 @@ class Controller : public rclcpp::Node {
   inline void convert_steering_angle(double steering_wheel_deg, double &delta_l_rad, double &delta_r_rad);
   inline void calculate_load_transfer(double ax, double ay, double &fz_fl, double &fz_fr, double &fz_rl, double &fz_rr);
   inline double referenceYawRate(double vx, double delta_deg);
+
+  // Configuration parameters
+
+  void load_parameters();
+
+  bool enable_mpc_ = true;
+
+  double max_moment_ = 100.0;
+  double min_torque_ = -30.0;
+
+  bool enable_tc_ = true;
+  double tc_slip_ratio_limit_ = 1.05;
+  double tc_torque_reduction_gain_ = 80.0;
+
+  double ku_ = 1.0 / 120.0;
+
+  double regen_braking_factor_ = 0.4;
   
   // Stany
   uint8_t control_state = 0;
@@ -117,8 +134,6 @@ class Controller : public rclcpp::Node {
 
   // Parametry TC
   const double R_e = 0.193;
-
-  const double kappa_limit = 1.05;
 
   // EKF
   Eigen::Vector2d ekf_x;
@@ -180,6 +195,7 @@ Controller::Controller()
       speed_fl(0), speed_fr(0), speed_rl(0), speed_rr(0),
       ay(0.0), ax(0.0), yaw_rate(0.0), batt_curr(0.0)
       {
+      load_parameters();
 
       acados_capsule = tv_nmpc_acados_create_capsule();
       int status = tv_nmpc_acados_create(acados_capsule);
@@ -206,6 +222,102 @@ Controller::Controller()
 Controller::~Controller() {
   tv_nmpc_acados_free(acados_capsule);
   tv_nmpc_acados_free_capsule(acados_capsule);
+}
+
+void Controller::load_parameters()
+{
+    enable_mpc_ = this->declare_parameter<bool>(
+        "enable_mpc", true
+    );
+
+    max_moment_ = this->declare_parameter<double>(
+        "max_moment", 100.0
+    );
+
+    min_torque_ = this->declare_parameter<double>(
+        "min_torque", -30.0
+    );
+
+    enable_tc_ = this->declare_parameter<bool>(
+        "enable_tc", true
+    );
+
+    tc_slip_ratio_limit_ = this->declare_parameter<double>(
+        "tc_slip_ratio_limit", 1.05
+    );
+
+    tc_torque_reduction_gain_ = this->declare_parameter<double>(
+        "tc_torque_reduction_gain", 80.0
+    );
+
+    ku_ = this->declare_parameter<double>(
+        "ku", 1.0 / 120.0
+    );
+
+    regen_braking_factor_ = this->declare_parameter<double>(
+        "regen_braking_factor", 0.4
+    );
+
+    // Parameter validation
+    if (!std::isfinite(max_moment_) ||
+        max_moment_ < 0.0 ||
+        max_moment_ > CAP_MOMENT) {
+        throw std::runtime_error("Invalid max_moment");
+    }
+
+    if (!std::isfinite(min_torque_) ||
+        min_torque_ > 0.0 ||
+        min_torque_ < -CAP_MOMENT) {
+        throw std::runtime_error("Invalid min_torque");
+    }
+
+    if (!std::isfinite(tc_slip_ratio_limit_) ||
+        tc_slip_ratio_limit_ < 1.0) {
+        throw std::runtime_error("Invalid tc_slip_ratio_limit");
+    }
+
+    if (!std::isfinite(tc_torque_reduction_gain_) ||
+        tc_torque_reduction_gain_ < 0.0) {
+        throw std::runtime_error("Invalid tc_torque_reduction_gain");
+    }
+
+    if (!std::isfinite(ku_) || ku_ <= 0.0) {
+        throw std::runtime_error("Invalid ku");
+    }
+
+    if (!std::isfinite(regen_braking_factor_) ||
+        regen_braking_factor_ < 0.0 ||
+        regen_braking_factor_ > 1.0) {
+        throw std::runtime_error("Invalid regen_braking_factor");
+    }
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Control mode: %s",
+        enable_mpc_ ? "MPC" : "OPEN-LOOP"
+    );
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Max moment: %.2f Nm | Min torque: %.2f Nm",
+        max_moment_,
+        min_torque_
+    );
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "TC: %s | Slip ratio limit: %.3f | Reduction gain: %.2f",
+        enable_tc_ ? "ENABLED" : "DISABLED",
+        tc_slip_ratio_limit_,
+        tc_torque_reduction_gain_
+    );
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Ku: %.9f | Regen braking factor: %.2f",
+        ku_,
+        regen_braking_factor_
+    );
 }
 
 void Controller::frontbox_driver_input_topic_callback(const FrontboxDriverInput msg) { frontbox_driver_input = msg; }
@@ -304,34 +416,39 @@ void Controller::control_loop() {
   double yaw_rate_ref = referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
   double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
-  double manual_torque = MAX_MOMENT * pedal;
+  double manual_torque = max_moment_ * pedal;
   ControlMode prev_mode = control_mode;
  // vx_est = 0;
 
-  switch (control_mode) {
-    case ControlMode::MANUAL:
-      control_state = 1;
-      if (vx_est >= SPEED_WARMUP) control_mode = ControlMode::WARMUP;
-      break;
-    case ControlMode::WARMUP:
-      if (vx_est < SPEED_WARMUP) { control_mode = ControlMode::MANUAL; is_initialized = false; }
-      else if (vx_est >= SPEED_ENTER_NMPC) { control_mode = ControlMode::BLEND_IN; }
-      break;
-    case ControlMode::BLEND_IN:
-      blend_alpha += dt / BLEND_DURATION_S;
-      if (blend_alpha >= 1.0) { blend_alpha = 1.0; control_mode = ControlMode::NMPC; }
-      if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
-      break;
-    case ControlMode::NMPC:
-      control_state = 2;
-      if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
-      break;
-    case ControlMode::BLEND_OUT:
-      blend_alpha -= dt / BLEND_DURATION_S;
-      if (blend_alpha <= 0.0) { blend_alpha = 0.0; control_mode = ControlMode::WARMUP; }
-      if (vx_est >= SPEED_ENTER_NMPC) control_mode = ControlMode::BLEND_IN;
-      break;
+  if (!enable_mpc_) {
+      control_mode = ControlMode::MANUAL;
+      blend_alpha = 0.0;
   }
+  else
+    switch (control_mode) {
+      case ControlMode::MANUAL:
+        control_state = 1;
+        if (vx_est >= SPEED_WARMUP) control_mode = ControlMode::WARMUP;
+        break;
+      case ControlMode::WARMUP:
+        if (vx_est < SPEED_WARMUP) { control_mode = ControlMode::MANUAL; is_initialized = false; }
+        else if (vx_est >= SPEED_ENTER_NMPC) { control_mode = ControlMode::BLEND_IN; }
+        break;
+      case ControlMode::BLEND_IN:
+        blend_alpha += dt / BLEND_DURATION_S;
+        if (blend_alpha >= 1.0) { blend_alpha = 1.0; control_mode = ControlMode::NMPC; }
+        if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
+        break;
+      case ControlMode::NMPC:
+        control_state = 2;
+        if (vx_est < SPEED_EXIT_NMPC) control_mode = ControlMode::BLEND_OUT;
+        break;
+      case ControlMode::BLEND_OUT:
+        blend_alpha -= dt / BLEND_DURATION_S;
+        if (blend_alpha <= 0.0) { blend_alpha = 0.0; control_mode = ControlMode::WARMUP; }
+        if (vx_est >= SPEED_ENTER_NMPC) control_mode = ControlMode::BLEND_IN;
+        break;
+    }
 
   if (control_mode != prev_mode) {
     RCLCPP_INFO(this->get_logger(),
@@ -360,7 +477,7 @@ void Controller::control_loop() {
   }
   else {
     if (pedal < 0.05 && vx_est > 3.0) {
-      manual_torque = -0.4 * MAX_MOMENT;
+      manual_torque = -regen_braking_factor_ * max_moment_;
       control_state = 3;
     }
 
@@ -439,18 +556,22 @@ void Controller::control_loop() {
       for (int i = 0; i < 4; i++) {
           double blended = (1.0 - blend_alpha) * manual_torque + blend_alpha * prev_tau_nmpc[i];
 
-          double max_safe_v_wheel = (vx_est * kappa_limit);
-          if (enable_tc && pedal > 0.05) {
+          double max_safe_v_wheel = vx_est * tc_slip_ratio_limit_;
+          if (enable_tc_ && pedal > 0.05) {
               tc_on = true;
               double current_v_wheel = w_actual[i] * R_e;
-              double dynamic_max_torque = MAX_MOMENT;
+              double dynamic_max_torque = max_moment_;
+
               if (current_v_wheel > max_safe_v_wheel) {
                   double speed_excess = current_v_wheel - max_safe_v_wheel;
-                  dynamic_max_torque = std::max(0.0, MAX_MOMENT - speed_excess * 80.0);
+                  dynamic_max_torque = std::max(
+                      0.0,
+                      max_moment_ - speed_excess * tc_torque_reduction_gain_
+                  );
               }
-              tau_final[i] = std::clamp(blended, -30.0, dynamic_max_torque);
+              tau_final[i] = std::clamp(blended, min_torque_, dynamic_max_torque);
           } else {
-              tau_final[i] = std::clamp(blended, -30.0, MAX_MOMENT);
+              tau_final[i] = std::clamp(blended, min_torque_, max_moment_);
           }
       }
     }
@@ -499,7 +620,7 @@ inline double Controller::convert_wheel_speed(double rpm) {
 inline double Controller::referenceYawRate(double vx, double delta_deg)
 {
     const double delta_wheel = (delta_deg * M_PI / 180.0);
-    const double denominator = 1.53 * (0.1 + Ku * vx * vx);
+    const double denominator = 1.53 * (0.1 + ku_ * vx * vx);
 
     if (std::fabs(denominator) < 1e-6)
         return 0.0;
