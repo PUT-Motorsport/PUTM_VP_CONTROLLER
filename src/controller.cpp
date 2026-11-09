@@ -306,6 +306,7 @@ void Controller::control_loop() {
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
   double manual_torque = MAX_MOMENT * pedal;
   ControlMode prev_mode = control_mode;
+ // vx_est = 0;
 
   switch (control_mode) {
     case ControlMode::MANUAL:
@@ -359,7 +360,7 @@ void Controller::control_loop() {
   }
   else {
     if (pedal < 0.05 && vx_est > 3.0) {
-      manual_torque = -0.3 * MAX_MOMENT;
+      manual_torque = -0.4 * MAX_MOMENT;
       control_state = 3;
     }
 
