@@ -332,47 +332,8 @@ void Controller::amk_actual_values4_callback(const AmkActualValues1 msg) { speed
 // void Controller::xsens_rate_of_turn_callback(const XsensRateOfTurn msg) { (void)msg; /* yaw_rate = msg.gyr_z; */ }
 
 void Controller::xsens_acceleration_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) {
-  // double ax_raw = msg->vector.y;
-  // double ay_raw = -msg->vector.x;
-
-  // ax = b0*ax_raw + b1*ax_raw_prev1 + b2*ax_raw_prev2 - a1*ax_filt_prev1 - a2*ax_filt_prev2;
-
-  // ay = b0*ay_raw + b1*ay_raw_prev1 + b2*ay_raw_prev2 - a1*ay_filt_prev1 - a2*ay_filt_prev2;
-
-  // ax_raw_prev2 = ax_raw_prev1;
-  // ax_raw_prev1 = ax_raw;
-  // ax_filt_prev2 = ax_filt_prev1;
-  // ax_filt_prev1 = ax;
-
-  // ay_raw_prev2 = ay_raw_prev1;
-  // ay_raw_prev1 = ay_raw;
-  // ay_filt_prev2 = ay_filt_prev1;
-  // ay_filt_prev1 = ay;
-}
-
-void Controller::xsens_angular_velocity_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) {
-
-  // double yaw_rate_raw = msg->vector.z;
-
-  // yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
-
-  // yaw_rate_raw_prev2 = yaw_rate_raw_prev1;
-  // yaw_rate_raw_prev1 = yaw_rate_raw;
-  // yaw_rate_filt_prev2 = yaw_rate_filt_prev1;
-  // yaw_rate_filt_prev1 = yaw_rate;
-}
-
-void Controller::vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup msg) {
-  double ax_raw = msg.accel.y * -1;
-  double ay_raw = msg.accel.x;
-  double yaw_rate_raw = msg.angularrate.z;
-
-  yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
-
-  yaw_rate_raw_prev2 = yaw_rate_raw_prev1;
-  yaw_rate_raw_prev1 = yaw_rate_raw;
-  yaw_rate_filt_prev2 = yaw_rate_filt_prev1;
-  yaw_rate_filt_prev1 = yaw_rate;
+  double ax_raw = msg->vector.y;
+  double ay_raw = -msg->vector.x;
 
   ax = b0*ax_raw + b1*ax_raw_prev1 + b2*ax_raw_prev2 - a1*ax_filt_prev1 - a2*ax_filt_prev2;
 
@@ -387,6 +348,45 @@ void Controller::vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup
   ay_raw_prev1 = ay_raw;
   ay_filt_prev2 = ay_filt_prev1;
   ay_filt_prev1 = ay;
+}
+
+void Controller::xsens_angular_velocity_callback(const geometry_msgs::msg::Vector3Stamped::SharedPtr msg) {
+
+  double yaw_rate_raw = msg->vector.z;
+
+  yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
+
+  yaw_rate_raw_prev2 = yaw_rate_raw_prev1;
+  yaw_rate_raw_prev1 = yaw_rate_raw;
+  yaw_rate_filt_prev2 = yaw_rate_filt_prev1;
+  yaw_rate_filt_prev1 = yaw_rate;
+}
+
+void Controller::vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup msg) {
+  // double ax_raw = msg.accel.y * -1;
+  // double ay_raw = msg.accel.x;
+  // double yaw_rate_raw = msg.angularrate.z;
+
+  // yaw_rate = b0*yaw_rate_raw + b1*yaw_rate_raw_prev1 + b2*yaw_rate_raw_prev2 - a1*yaw_rate_filt_prev1 - a2*yaw_rate_filt_prev2;
+
+  // yaw_rate_raw_prev2 = yaw_rate_raw_prev1;
+  // yaw_rate_raw_prev1 = yaw_rate_raw;
+  // yaw_rate_filt_prev2 = yaw_rate_filt_prev1;
+  // yaw_rate_filt_prev1 = yaw_rate;
+
+  // ax = b0*ax_raw + b1*ax_raw_prev1 + b2*ax_raw_prev2 - a1*ax_filt_prev1 - a2*ax_filt_prev2;
+
+  // ay = b0*ay_raw + b1*ay_raw_prev1 + b2*ay_raw_prev2 - a1*ay_filt_prev1 - a2*ay_filt_prev2;
+
+  // ax_raw_prev2 = ax_raw_prev1;
+  // ax_raw_prev1 = ax_raw;
+  // ax_filt_prev2 = ax_filt_prev1;
+  // ax_filt_prev1 = ax;
+
+  // ay_raw_prev2 = ay_raw_prev1;
+  // ay_raw_prev1 = ay_raw;
+  // ay_filt_prev2 = ay_filt_prev1;
+  // ay_filt_prev1 = ay;
 }
 
 void Controller::bms_hv_main_callback(const BmsHvMain msg) { batt_curr = msg.current; }
