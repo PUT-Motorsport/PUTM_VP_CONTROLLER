@@ -261,13 +261,6 @@ void Controller::load_parameters()
         "regen_braking_factor", 0.4
     );
 
-    // Parameter validation
-    if (!std::isfinite(max_moment_) ||
-        max_moment_ < 0.0 ||
-        max_moment_ > CAP_MOMENT) {
-        throw std::runtime_error("Invalid max_moment");
-    }
-
     if (!std::isfinite(min_torque_) ||
         min_torque_ > 0.0 ||
         min_torque_ < -CAP_MOMENT) {
