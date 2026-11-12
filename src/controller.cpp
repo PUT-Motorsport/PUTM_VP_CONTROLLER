@@ -15,7 +15,8 @@
 // constexpr double MAX_MOMENT = 100;
 // constexpr double Ku = 1.0/120.0;
 // constexpr bool enable_tc = true;
-constexpr double CAP_MOMENT = 100;
+// CAP_MOMENT is the percent of the nominal torque. Inverter gets value in range -1000 to 1000, which is per mil of the nominal torque. This is not the max torque. We divide max torque by it to get the percent of the nominal torque. This is used to limit the torque command sent to the inverter.
+constexpr double CAP_MOMENT = 100; 
 constexpr double REGEN_MIN_FACTOR = 0.02;
 constexpr double AY_START = 2.0;
 constexpr double AY_END   = 7.0;
