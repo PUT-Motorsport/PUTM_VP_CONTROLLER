@@ -16,6 +16,9 @@
 // constexpr double Ku = 1.0/120.0;
 // constexpr bool enable_tc = true;
 constexpr double CAP_MOMENT = 100;
+constexpr double REGEN_MIN_FACTOR = 0.02;
+constexpr double AY_START = 2.0;
+constexpr double AY_END   = 7.0;
 
 extern "C" {
 #include "acados_solver_tv_nmpc.h"
@@ -476,8 +479,28 @@ void Controller::control_loop() {
     is_initialized = false;
   }
   else {
+    double ay_ref = std::abs(vx_est * yaw_rate_ref);
+    double ay_demand = std::max(ay_ref, std::abs(ay));
+    double s = std::clamp(
+        (ay_demand - AY_START) / (AY_END - AY_START),
+        0.0,
+        1.0
+    );
+
+    s = s * s * (3.0 - 2.0 * s);
+
+    double regen_factor =
+        regen_braking_factor_ * (1.0 - s)
+        + REGEN_MIN_FACTOR * s;
+    
+    regen_factor = std::clamp(
+        regen_factor,
+        REGEN_MIN_FACTOR,
+        regen_braking_factor_
+    );
+
     if (pedal < 0.05 && vx_est > 3.0) {
-      manual_torque = -regen_braking_factor_ * max_moment_;
+      manual_torque = -regen_factor * max_moment_;
       control_state = 3;
     }
 
