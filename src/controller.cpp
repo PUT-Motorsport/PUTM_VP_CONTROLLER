@@ -707,12 +707,15 @@ inline void Controller::estimate_velocity_ekf(double ax, double ay, double r, do
     const double c   = 0.621;
     const double b   = 0.765;
 
-    const double q_vx      = 5.50;
+    // Offline vx-only calibration against VectorNav -linear.y (ekf/tuning).
+    // Effective radius is local to EKF: TC/MPC calibration is independent.
+    const double ekf_radius = 0.19796667568079587;
+    const double q_vx      = 1.0758990651822484e-05;
     const double q_vy      = 0.00010;
-    const double r_wheels  = 0.005777;
+    const double r_wheels  = 0.00011281886561156897;
     const double r_yaw     = 0.007262;
     const double r_zlvu    = 0.00969129;
-    const double ax_pen    = 0.006621;
+    const double ax_pen    = 5.489146114192582e-05;
 
     Eigen::Matrix2d Q;
     Q << q_vx, 0.0,
@@ -735,10 +738,10 @@ inline void Controller::estimate_velocity_ekf(double ax, double ay, double r, do
 
     // POMIARY KÓŁ
     Eigen::Vector4d z_wheels, z_pred_wheels;
-    z_wheels(0) = w_fl * R_e * std::cos(delta_l);
-    z_wheels(1) = w_fr * R_e * std::cos(delta_r);
-    z_wheels(2) = w_rl * R_e;
-    z_wheels(3) = w_rr * R_e;
+    z_wheels(0) = w_fl * ekf_radius * std::cos(delta_l);
+    z_wheels(1) = w_fr * ekf_radius * std::cos(delta_r);
+    z_wheels(2) = w_rl * ekf_radius;
+    z_wheels(3) = w_rr * ekf_radius;
 
     z_pred_wheels(0) = x_pred(0) - r * c;
     z_pred_wheels(1) = x_pred(0) + r * c;
