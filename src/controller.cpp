@@ -7,6 +7,7 @@
 #include "putm_vcl_interfaces/msg/yaw_ref.hpp"
 #include "geometry_msgs/msg/vector3_stamped.hpp"
 #include <Eigen/Dense>
+#include "putm_controller/traction_control.hpp"
 
 // #include "putm_vcl_interfaces/msg/xsens_acceleration.hpp"
 // #include "putm_vcl_interfaces/msg/xsens_rate_of_turn.hpp"
@@ -78,8 +79,9 @@ class Controller : public rclcpp::Node {
   double min_torque_ = -30.0;
 
   bool enable_tc_ = true;
-  double tc_slip_ratio_limit_ = 1.05;
+  double tc_slip_ratio_limit_ = 1.08;
   double tc_torque_reduction_gain_ = 80.0;
+  putm::TractionControl traction_control_;
 
   double ku_ = 1.0 / 120.0;
 
@@ -248,12 +250,29 @@ void Controller::load_parameters()
     );
 
     tc_slip_ratio_limit_ = this->declare_parameter<double>(
-        "tc_slip_ratio_limit", 1.05
+        "tc_slip_ratio_limit", 1.08
     );
 
     tc_torque_reduction_gain_ = this->declare_parameter<double>(
         "tc_torque_reduction_gain", 80.0
     );
+
+    auto &tc = traction_control_.config;
+    tc.algorithm = declare_parameter<std::string>("tc_algorithm", "legacy");
+    tc.ratio = tc_slip_ratio_limit_;
+    tc.legacy_gain = tc_torque_reduction_gain_;
+    tc.radius = declare_parameter<double>("tc_radius", tc.radius);
+    tc.min_speed = declare_parameter<double>("tc_min_speed", tc.min_speed);
+    tc.kp = declare_parameter<double>("tc_pid_kp", tc.kp);
+    tc.ki = declare_parameter<double>("tc_pid_ki", tc.ki);
+    tc.kd = declare_parameter<double>("tc_pid_kd", tc.kd);
+    tc.derivative_tau = declare_parameter<double>("tc_derivative_tau", tc.derivative_tau);
+    tc.inertia = declare_parameter<double>("tc_wheel_inertia", tc.inertia);
+    tc.wheel_nm_per_unit = declare_parameter<double>("tc_wheel_nm_per_unit", tc.wheel_nm_per_unit);
+    tc.smc_gain = declare_parameter<double>("tc_smc_gain", tc.smc_gain);
+    tc.smc_boundary = declare_parameter<double>("tc_smc_boundary", tc.smc_boundary);
+    tc.observer_tau = declare_parameter<double>("tc_observer_tau", tc.observer_tau);
+    tc.validate();
 
     ku_ = this->declare_parameter<double>(
         "ku", 1.0 / 120.0
@@ -456,6 +475,7 @@ void Controller::control_loop() {
   }
 
   bool solver_active = (control_mode != ControlMode::MANUAL);
+  if (!solver_active) traction_control_.reset();
   bool tc_on = false;
 
   // Low speed mode z manualnym sterowaniem momentem
@@ -558,6 +578,7 @@ void Controller::control_loop() {
     if (status != 0) {
     RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 500, "NMPC Fail. Przytrzymanie momentu.");
     is_initialized = false;
+    traction_control_.reset();
     }
     else {
 
@@ -575,7 +596,16 @@ void Controller::control_loop() {
           double blended = (1.0 - blend_alpha) * manual_torque + blend_alpha * prev_tau_nmpc[i];
 
           double max_safe_v_wheel = vx_est * tc_slip_ratio_limit_;
-          if (enable_tc_ && pedal > 0.05) {
+          if (traction_control_.config.algorithm != "legacy") {
+              const double lateral_offset = (i % 2 == 0) ? -0.621 : 0.621;
+              const double wheel_angle = i == 0 ? delta_l_rad : (i == 1 ? delta_r_rad : 0.0);
+              const double ground_speed = (vx_est + yaw_rate * lateral_offset) * std::cos(wheel_angle) + (i < 2 ? yaw_rate * 0.765 * std::sin(wheel_angle) : 0.0);
+              const double requested = std::clamp(blended, min_torque_, max_moment_);
+
+              tau_final[i] = traction_control_.limit(i, requested, max_moment_, ground_speed, w_actual[i], ax, dt, enable_tc_ && pedal > 0.05);
+              tc_on = tc_on || (enable_tc_ && pedal > 0.05);
+              
+          } else if (enable_tc_ && pedal > 0.05) {
               tc_on = true;
               double current_v_wheel = w_actual[i] * R_e;
               double dynamic_max_torque = max_moment_;
