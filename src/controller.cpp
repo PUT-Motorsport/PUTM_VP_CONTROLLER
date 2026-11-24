@@ -8,6 +8,8 @@
 #include "geometry_msgs/msg/vector3_stamped.hpp"
 #include <Eigen/Dense>
 #include "putm_controller/traction_control.hpp"
+#include "putm_controller/inverter_limit.hpp"
+#include <array>
 
 // #include "putm_vcl_interfaces/msg/xsens_acceleration.hpp"
 // #include "putm_vcl_interfaces/msg/xsens_rate_of_turn.hpp"
@@ -17,10 +19,10 @@
 // constexpr double Ku = 1.0/120.0;
 // constexpr bool enable_tc = true;
 
-// CAP_MOMENT is the 100 percent of the nominal torque. Inverter gets value in range -2000 to 2000, which is per mil of the nominal torque. 
+// NOMINAL_TORQUE is the 100 percent of the nominal torque. Inverter gets value in range -2000 to 2000, which is per mil of the nominal torque. 
 // This is not the max torque. We divide max torque by it to get the percent of the nominal torque and then multiply it by 1000.
 // So if you have max_moment=120, you have 120% or 1200 per mile of the nominal torque send to the inverted. 
-constexpr double CAP_MOMENT = 100; 
+constexpr double NOMINAL_TORQUE = 100; 
 constexpr double REGEN_MIN_FACTOR = 0.02;
 constexpr double AY_START = 2.0;
 constexpr double AY_END   = 7.0;
@@ -92,7 +94,13 @@ class Controller : public rclcpp::Node {
   // Stany
   uint8_t control_state = 0;
   bool is_initialized;
-  double speed_fl, speed_fr, speed_rl, speed_rr;
+  double speed_fl = 0, speed_fr = 0, speed_rl = 0, speed_rr = 0;
+  putm::InverterLimit inverter_limit_;
+  double battery_voltage_v_ = 0;
+  double inverter_feedback_timeout_s_ = 0.1;
+  using FeedbackClock = std::chrono::steady_clock;
+  FeedbackClock::time_point bms_received_{};
+  std::array<FeedbackClock::time_point, 4> motor_received_{};
   double ay, ax, yaw_rate, batt_curr;
   Setpoints setpoints;
   YawRef yaw_ref;
@@ -235,6 +243,16 @@ Controller::~Controller() {
 
 void Controller::load_parameters()
 {
+    auto &inv = inverter_limit_;
+    inv.nominal_nm = declare_parameter<double>("inverter_nominal_torque_nm", 9.8);
+    inv.peak_nm = declare_parameter<double>("inverter_peak_torque_nm", 21.0);
+    inv.max_rpm = declare_parameter<double>("inverter_max_motor_rpm", 20000.0);
+    inv.margin = declare_parameter<double>("inverter_torque_margin", 0.9);
+    inverter_feedback_timeout_s_ = declare_parameter<double>("inverter_feedback_timeout_s", 0.1);
+    inv.validate();
+    if (!std::isfinite(inverter_feedback_timeout_s_) || inverter_feedback_timeout_s_ <= 0)
+      throw std::invalid_argument("Invalid inverter feedback timeout");
+
     enable_mpc_ = this->declare_parameter<bool>(
         "enable_mpc", true
     );
@@ -286,7 +304,7 @@ void Controller::load_parameters()
 
     if (!std::isfinite(min_torque_) ||
         min_torque_ > 0.0 ||
-        min_torque_ < -CAP_MOMENT) {
+        min_torque_ < -NOMINAL_TORQUE) {
         throw std::runtime_error("Invalid min_torque");
     }
 
@@ -341,10 +359,10 @@ void Controller::load_parameters()
 
 void Controller::frontbox_driver_input_topic_callback(const FrontboxDriverInput msg) { frontbox_driver_input = msg; }
 void Controller::steering_wheel_callback(const SteeringWheel::SharedPtr msg) { steering_wheel = *msg; }
-void Controller::amk_actual_values1_callback(const AmkActualValues1 msg) { speed_fl = abs(msg.actual_velocity); }
-void Controller::amk_actual_values2_callback(const AmkActualValues1 msg) { speed_fr = abs(msg.actual_velocity); }
-void Controller::amk_actual_values3_callback(const AmkActualValues1 msg) { speed_rl = abs(msg.actual_velocity); }
-void Controller::amk_actual_values4_callback(const AmkActualValues1 msg) { speed_rr = abs(msg.actual_velocity); }
+void Controller::amk_actual_values1_callback(const AmkActualValues1 msg) { speed_fl = abs(msg.actual_velocity); motor_received_[0] = FeedbackClock::now(); }
+void Controller::amk_actual_values2_callback(const AmkActualValues1 msg) { speed_fr = abs(msg.actual_velocity); motor_received_[1] = FeedbackClock::now(); }
+void Controller::amk_actual_values3_callback(const AmkActualValues1 msg) { speed_rl = abs(msg.actual_velocity); motor_received_[2] = FeedbackClock::now(); }
+void Controller::amk_actual_values4_callback(const AmkActualValues1 msg) { speed_rr = abs(msg.actual_velocity); motor_received_[3] = FeedbackClock::now(); }
 
 // void Controller::xsens_acceleration_ay_callback(const XsensAcceleration msg) { (void)msg; /* ay = msg.acc_y; */ }
 // void Controller::xsens_acceleration_ax_callback(const XsensAcceleration msg) { (void)msg; /* ax = msg.acc_x; */ }
@@ -408,7 +426,11 @@ void Controller::vn300_rate_of_turn_callback(const vectornav_msgs::msg::ImuGroup
   // ay_filt_prev1 = ay;
 }
 
-void Controller::bms_hv_main_callback(const BmsHvMain msg) { batt_curr = msg.current; }
+void Controller::bms_hv_main_callback(const BmsHvMain msg) {
+  batt_curr = static_cast<double>(msg.current) * 0.1;
+  battery_voltage_v_ = static_cast<double>(msg.voltage_sum) * 0.1;
+  bms_received_ = FeedbackClock::now();
+}
 
 
 
@@ -648,6 +670,17 @@ void Controller::control_loop() {
   yaw_ref.tc_on = tc_on;
   yaw_rate_ref_publisher->publish(yaw_ref);
 
+  // Final guard covers manual, MPC, blend and TC paths, before motor polarity changes.
+  const auto feedback_now = FeedbackClock::now();
+  const auto fresh = [&](FeedbackClock::time_point received) {
+    return received != FeedbackClock::time_point{} &&
+      std::chrono::duration<double>(feedback_now-received).count() <= inverter_feedback_timeout_s_;
+  };
+  const std::array<double, 4> motor_rpm{speed_fl, speed_fr, speed_rl, speed_rr};
+  for (std::size_t i = 0; i < motor_rpm.size(); ++i)
+    tau_final[i] = inverter_limit_.limit(tau_final[i], motor_rpm[i], battery_voltage_v_,
+                                        fresh(bms_received_) && fresh(motor_received_[i]));
+
   setpoints.front_left.torque = convert_torque(-tau_final[0]);
   setpoints.front_right.torque = convert_torque(tau_final[1]);
   setpoints.rear_left.torque = convert_torque(tau_final[2]);
@@ -731,7 +764,7 @@ inline void Controller::calculate_load_transfer(double ax_sensor, double ay_sens
 
 inline int32_t Controller::convert_torque(double torque) {
   static constexpr double TORQUE_SCALER = 1000.0;
-  return (int32_t)((torque / CAP_MOMENT) * TORQUE_SCALER);
+  return (int32_t)((torque / NOMINAL_TORQUE) * TORQUE_SCALER);
 }
 
 inline void Controller::estimate_velocity_ekf(double ax, double ay, double r, double w_fl, double w_fr, double w_rl, double w_rr, double delta_l, double delta_r, double &vx_est, double &vy_est) {
