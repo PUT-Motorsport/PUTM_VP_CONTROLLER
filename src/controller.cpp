@@ -17,10 +17,10 @@
 // constexpr double Ku = 1.0/120.0;
 // constexpr bool enable_tc = true;
 
-// CAP_MOMENT is the 100 percent of the nominal torque. Inverter gets value in range -2000 to 2000, which is per mil of the nominal torque. 
-// This is not the max torque. We divide max torque by it to get the percent of the nominal torque and then multiply it by 1000.
-// So if you have max_moment=120, you have 120% or 1200 per mile of the nominal torque send to the inverted. 
-constexpr double CAP_MOMENT = 100; 
+// AMK Inverters for setpoint of a torque get per mile of the nominal motors torque
+// Means that setpoint = 1000 will be equal to 9.8 Nm
+constexpr double NOMINAL_TORQUE = 9.8; 
+constexpr double DRIVE_RATIO = 11.0; 
 constexpr double REGEN_MIN_FACTOR = 0.02;
 constexpr double AY_START = 2.0;
 constexpr double AY_END   = 7.0;
@@ -77,8 +77,8 @@ class Controller : public rclcpp::Node {
 
   bool enable_mpc_ = true;
 
-  double max_moment_ = 100.0;
-  double min_torque_ = -30.0;
+  double max_moment_ = NOMINAL_TORQUE;
+  double min_torque_ = -3.0;
 
   bool enable_tc_ = true;
   double tc_slip_ratio_limit_ = 1.08;
@@ -240,11 +240,11 @@ void Controller::load_parameters()
     );
 
     max_moment_ = this->declare_parameter<double>(
-        "max_moment", 100.0
+        "max_moment", NOMINAL_TORQUE
     );
 
     min_torque_ = this->declare_parameter<double>(
-        "min_torque", -30.0
+        "min_torque", -3.0
     );
 
     enable_tc_ = this->declare_parameter<bool>(
@@ -270,7 +270,10 @@ void Controller::load_parameters()
     tc.kd = declare_parameter<double>("tc_pid_kd", tc.kd);
     tc.derivative_tau = declare_parameter<double>("tc_derivative_tau", tc.derivative_tau);
     tc.inertia = declare_parameter<double>("tc_wheel_inertia", tc.inertia);
-    tc.wheel_nm_per_unit = declare_parameter<double>("tc_wheel_nm_per_unit", tc.wheel_nm_per_unit);
+    // The configured scale is Nm at the wheel per percent of nominal motor torque.
+    // TC now receives wheel Nm, so normalize the scale against that conversion.
+    tc.wheel_nm_per_unit = declare_parameter<double>("tc_wheel_nm_per_unit", tc.wheel_nm_per_unit) /
+                          (NOMINAL_TORQUE * DRIVE_RATIO / 100.0);
     tc.smc_gain = declare_parameter<double>("tc_smc_gain", tc.smc_gain);
     tc.smc_boundary = declare_parameter<double>("tc_smc_boundary", tc.smc_boundary);
     tc.observer_tau = declare_parameter<double>("tc_observer_tau", tc.observer_tau);
@@ -284,9 +287,15 @@ void Controller::load_parameters()
         "regen_braking_factor", 0.4
     );
 
+    if (!std::isfinite(max_moment_) ||
+        max_moment_ < 0.0 ||
+        max_moment_ > 2.0 * NOMINAL_TORQUE) {
+        throw std::runtime_error("Invalid max_moment");
+    }
+
     if (!std::isfinite(min_torque_) ||
         min_torque_ > 0.0 ||
-        min_torque_ < -CAP_MOMENT) {
+        min_torque_ < -NOMINAL_TORQUE) {
         throw std::runtime_error("Invalid min_torque");
     }
 
@@ -435,9 +444,13 @@ void Controller::control_loop() {
   double yaw_rate_ref = referenceYawRate(vx_est, delta_avg_rad * 180.0 / M_PI);
   double fz_fl = 0.0, fz_fr = 0.0, fz_rl = 0.0, fz_rr = 0.0;
   calculate_load_transfer(ax, ay, fz_fl, fz_fr, fz_rl, fz_rr);
-  double manual_torque = max_moment_ * pedal;
+  const double max_wheel_torque = max_moment_ * DRIVE_RATIO;
+  const double min_wheel_torque = min_torque_ * DRIVE_RATIO;
+  double manual_torque = max_wheel_torque * std::clamp(pedal, 0.0, 1.0);
   ControlMode prev_mode = control_mode;
- // vx_est = 0;
+
+  // Uncomment this to disable the state machine and force the controller to always be in manual mode
+  // vx_est = 0;
 
   if (!enable_mpc_) {
       control_mode = ControlMode::MANUAL;
@@ -506,18 +519,14 @@ void Controller::control_loop() {
 
     s = s * s * (3.0 - 2.0 * s);
 
-    double regen_factor =
+    const double regen_floor = std::min(REGEN_MIN_FACTOR, regen_braking_factor_);
+    const double regen_factor =
         regen_braking_factor_ * (1.0 - s)
-        + REGEN_MIN_FACTOR * s;
-    
-    regen_factor = std::clamp(
-        regen_factor,
-        REGEN_MIN_FACTOR,
-        regen_braking_factor_
-    );
+        + regen_floor * s;
 
+    // REGEN BRAKING: torque when pedal is released and vehicle speed is above threshold
     if (pedal < 0.05 && vx_est > 3.0) {
-      manual_torque = -regen_factor * max_moment_;
+      manual_torque = std::max(min_wheel_torque, -regen_factor * NOMINAL_TORQUE * DRIVE_RATIO);
       control_state = 3;
     }
 
@@ -595,33 +604,34 @@ void Controller::control_loop() {
       double w_actual[4] = {w_fl, w_fr, w_rl, w_rr};
       
       for (int i = 0; i < 4; i++) {
-          double blended = (1.0 - blend_alpha) * manual_torque + blend_alpha * prev_tau_nmpc[i];
+          const double requested = std::clamp(
+              (1.0 - blend_alpha) * manual_torque + blend_alpha * prev_tau_nmpc[i],
+              min_wheel_torque, max_wheel_torque);
 
           double max_safe_v_wheel = vx_est * tc_slip_ratio_limit_;
           if (traction_control_.config.algorithm != "legacy") {
               const double lateral_offset = (i % 2 == 0) ? -0.621 : 0.621;
               const double wheel_angle = i == 0 ? delta_l_rad : (i == 1 ? delta_r_rad : 0.0);
               const double ground_speed = (vx_est + yaw_rate * lateral_offset) * std::cos(wheel_angle) + (i < 2 ? yaw_rate * 0.765 * std::sin(wheel_angle) : 0.0);
-              const double requested = std::clamp(blended, min_torque_, max_moment_);
-
-              tau_final[i] = traction_control_.limit(i, requested, max_moment_, ground_speed, w_actual[i], ax, dt, enable_tc_ && pedal > 0.05);
-              tc_on = tc_on || (enable_tc_ && pedal > 0.05);
+              const double limited = traction_control_.limit(i, requested, max_wheel_torque, ground_speed, w_actual[i], ax, dt, enable_tc_ && pedal > 0.05);
+              tau_final[i] = requested <= 0.0 ? requested : limited;
+              tc_on = tc_on || tau_final[i] < requested;
               
           } else if (enable_tc_ && pedal > 0.05) {
-              tc_on = true;
               double current_v_wheel = w_actual[i] * R_e;
-              double dynamic_max_torque = max_moment_;
+              double dynamic_max_torque = max_wheel_torque;
 
               if (current_v_wheel > max_safe_v_wheel) {
                   double speed_excess = current_v_wheel - max_safe_v_wheel;
                   dynamic_max_torque = std::max(
                       0.0,
-                      max_moment_ - speed_excess * tc_torque_reduction_gain_
+                      max_wheel_torque - speed_excess * tc_torque_reduction_gain_
                   );
               }
-              tau_final[i] = std::clamp(blended, min_torque_, dynamic_max_torque);
+              tau_final[i] = std::min(requested, dynamic_max_torque);
+              tc_on = tc_on || tau_final[i] < requested;
           } else {
-              tau_final[i] = std::clamp(blended, min_torque_, max_moment_);
+              tau_final[i] = requested;
           }
       }
     }
@@ -648,7 +658,7 @@ void Controller::control_loop() {
   yaw_ref.tc_on = tc_on;
   yaw_rate_ref_publisher->publish(yaw_ref);
 
-  setpoints.front_left.torque = convert_torque(-tau_final[0]);
+  setpoints.front_left.torque = convert_torque(tau_final[0]);
   setpoints.front_right.torque = convert_torque(tau_final[1]);
   setpoints.rear_left.torque = convert_torque(tau_final[2]);
   setpoints.rear_right.torque = convert_torque(tau_final[3]);
@@ -731,7 +741,8 @@ inline void Controller::calculate_load_transfer(double ax_sensor, double ay_sens
 
 inline int32_t Controller::convert_torque(double torque) {
   static constexpr double TORQUE_SCALER = 1000.0;
-  return (int32_t)((torque / CAP_MOMENT) * TORQUE_SCALER);
+  torque /= DRIVE_RATIO; // Convert to motor torque
+  return (int32_t)((torque / NOMINAL_TORQUE) * TORQUE_SCALER); // Convert to int32_t with scaling
 }
 
 inline void Controller::estimate_velocity_ekf(double ax, double ay, double r, double w_fl, double w_fr, double w_rl, double w_rr, double delta_l, double delta_r, double &vx_est, double &vy_est) {
